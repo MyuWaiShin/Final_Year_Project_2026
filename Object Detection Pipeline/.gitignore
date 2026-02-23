@@ -24,6 +24,8 @@ Data_Preparation_V2/data/images/
 Data_Preparation_V2/data/labels/
 Data_Preparation_V2/data/dataset/
 Data_Preparation_V2/data/_tmp_annotations/
+Data_Preparation_V3/data/
+recordings/
 
 # Raw video files anywhere
 *.mp4
@@ -42,7 +44,8 @@ Data_Preparation_V2/data/_tmp_annotations/
 runs/
 training/runs/
 Models_V1/
-
+Models_V2/
+Models_V3/
 # ── Data collection recordings & frames ────────────────────
 data_collection/data_collection/recordings/
 data_collection/data_collection/extracted_frames/
