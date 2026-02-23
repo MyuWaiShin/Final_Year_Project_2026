@@ -1,20 +1,55 @@
-# Camera calibration (device-specific)
-**/camera_calibration/
+# ==============================================================
+# PDE3802 — Object Detection Pipeline  .gitignore
+# ==============================================================
 
-# Python
+# ── Python ─────────────────────────────────────────────────
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
 venv/
 pose_est/
 *.egg-info/
+.env
 
-# Data
-*.avi
-*.mp4
-# *.jpg
-# *.png
-
-# IDE
+# ── IDE ────────────────────────────────────────────────────
 .vscode/
 .idea/
+
+# ── Large data — raw videos & extracted frames ──────────────
+# (too large for git; collect locally and run pipeline)
+Data_Preparation_V1/data/
+Data_Preparation_V2/data/raw_videos/
+Data_Preparation_V2/data/images/
+Data_Preparation_V2/data/labels/
+Data_Preparation_V2/data/dataset/
+Data_Preparation_V2/data/_tmp_annotations/
+
+# Raw video files anywhere
+*.mp4
+*.avi
+*.mov
+*.mkv
+
+# ── Model weights ───────────────────────────────────────────
+# (download via YOLO / HuggingFace cache, not stored in git)
+*.pt
+*.pth
+*.onnx
+*.torchscript
+
+# ── Training run outputs ────────────────────────────────────
+runs/
+training/runs/
+Models_V1/*/weights/
+
+# ── Data collection recordings & frames ────────────────────
+data_collection/data_collection/recordings/
+data_collection/data_collection/extracted_frames/
+
+# ── Camera calibration (device-specific) ───────────────────
+**/camera_calibration/
+
+# ── HuggingFace / autodistill cache ────────────────────────
+# (stored in ~/.cache, not in project)
+.cache/

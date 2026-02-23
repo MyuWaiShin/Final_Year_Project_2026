@@ -1,0 +1,47 @@
+# ==============================================================
+# PDE3802 Model V2 — Annotation + Training Requirements
+# Python 3.11.x  (recommended: 3.11.9)
+# Verified working versions as of Feb 2026
+# ==============================================================
+#
+# INSTALL ORDER (important — do NOT skip steps):
+#
+# STEP 1 — Install PyTorch with CUDA FIRST (before everything else).
+#   RTX 3080 / CUDA 12.1 (recommended):
+#     pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu121
+#
+# STEP 2 — Install groundingdino pure-Python wheel (avoids MSVC C++ build errors on Windows):
+#     pip install groundingdino-py
+#
+# STEP 3 — Install extra deps required by autodistill internals:
+#     pip install scikit-learn roboflow
+#
+# STEP 4 — Then install this file:
+#     pip install -r requirements_annotation.txt
+#
+# NOTE: Ignore warnings about supervision==0.6.0 conflict — works fine with newer supervision.
+# ==============================================================
+
+# ── Frame extraction ───────────────────────────────────────
+opencv-python>=4.8.0
+tqdm>=4.66.0
+
+# ── YOLO training ──────────────────────────────────────────
+ultralytics>=8.2.0          # YOLOv8 + YOLO11 unified API
+
+# ── Auto-annotation (Grounding DINO via autodistill) ───────
+autodistill>=0.1.7
+autodistill-grounding-dino>=0.1.4
+
+# ── Grounding DINO core ─────────────────────────────────────
+supervision>=0.19.0         # required by autodistill
+transformers==4.38.0        # PINNED: newer versions remove BertModel.get_head_mask used by groundingdino-py
+timm>=1.0.3                 # Vision transformers
+
+# ── Utilities ──────────────────────────────────────────────
+tabulate>=0.9.0
+Pillow>=10.3.0
+numpy>=1.26.0,<2.0.0        # numpy 2.x breaks some torch ops — stay on 1.x
+scipy>=1.13.0
+roboflow                    # required by autodistill internals
+scikit-learn                # required by autodistill-grounding-dino

@@ -1,0 +1,57 @@
+# ============================================================
+# PDE3802 Model V2 — Annotation + Training Requirements
+# Python 3.11.x  (recommended: 3.11.9)
+# ============================================================
+#
+# INSTALL ORDER (important — do NOT skip steps):
+#
+# STEP 1 — Install PyTorch with CUDA FIRST (before everything else).
+#           Pick the command that matches your CUDA version:
+#
+#   CUDA 12.1  (RTX 3080 / most modern NVIDIA drivers):
+#     pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu121
+#
+#   CUDA 11.8:
+#     pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu118
+#
+#   CPU only (no GPU):
+#     pip install torch==2.5.1 torchvision==0.20.1
+#
+# STEP 2 — Install groundingdino-py (pure-Python wheel, avoids MSVC C++ build errors on Windows):
+#     pip install groundingdino-py
+#
+# STEP 3 — Then install this file:
+#     pip install -r requirements_annotation.txt
+#
+# NOTE: Do NOT install the 'groundingdino' package from source (requires MSVC/gcc).
+#       'groundingdino-py' is a pre-compiled drop-in replacement that works on Windows.
+# ============================================================
+
+# ── Frame extraction ───────────────────────────────────────
+opencv-python>=4.8.0
+tqdm>=4.66.0
+
+# ── YOLO training ──────────────────────────────────────────
+ultralytics>=8.2.0          # YOLOv8 + YOLO11 unified API
+
+# ── Auto-annotation (Grounding DINO via autodistill) ───────
+autodistill>=0.1.7
+autodistill-grounding-dino>=0.1.4
+
+# ── Grounding DINO core (installed by autodistill-grounding-dino,
+#    pinned here for reproducibility) ───────────────────────
+supervision>=0.19.0         # required by autodistill
+transformers==4.38.0          # PINNED: newer versions remove BertModel.get_head_mask used by groundingdino-py
+# groundingdino-py>=0.4.0  # uncomment if autodistill doesn't pull it
+timm>=1.0.3                 # Vision transformers
+
+# ── Utilities ──────────────────────────────────────────────
+tabulate>=0.9.0
+Pillow>=10.3.0
+numpy>=1.26.0,<2.0.0        # numpy 2.x breaks some torch ops — stay on 1.x
+scipy>=1.13.0
+roboflow                    # required by autodistill internals
+scikit-learn                # required by autodistill-grounding-dino
+
+# ── Windows-specific: avoid known broken versions ──────────
+# duckdb>=0.10.0            # uncomment only if ultralytics pulls broken duckdb

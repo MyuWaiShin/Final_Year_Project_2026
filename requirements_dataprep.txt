@@ -1,0 +1,17 @@
+# ============================================================
+# PDE3802 Model V2 — Data Preparation Requirements
+# Python 3.11.x  (recommended: 3.11.9)
+# ============================================================
+# Install with:
+#   pip install -r requirements_dataprep.txt
+
+# ── Core frame extraction & file handling ──────────────────
+opencv-python>=4.8.0
+tqdm>=4.66.0
+pathlib2>=2.3.7       # backcompat shim, stdlib pathlib is fine on 3.11
+
+# ── Dataset stats & tables ─────────────────────────────────
+tabulate>=0.9.0       # optional — pretty tables in 3_dataset_stats.py
+
+# ── No heavy ML deps needed for steps 1-3 ──────────────────
+# (YOLO / torch / autodistill are in requirements_annotation.txt)
