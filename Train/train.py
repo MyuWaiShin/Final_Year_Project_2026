@@ -39,6 +39,16 @@ EPOCHS      = 100
 PATIENCE    = 20
 DEVICE      = 0         # 0 = GPU, 'cpu' = CPU only
 
+# Git absolute path for this machine
+GIT_EXE = r"C:\Users\MS3433\AppData\Local\Programs\Git\cmd\git.exe"
+
+# Configure environment for GitPython and Subprocesses
+os.environ['GIT_PYTHON_GIT_EXECUTABLE'] = GIT_EXE
+os.environ['GIT_PYTHON_REFRESH'] = 'quiet'
+git_dir = os.path.dirname(GIT_EXE)
+if git_dir not in os.environ['PATH']:
+    os.environ['PATH'] = git_dir + os.pathsep + os.environ['PATH']
+
 # ─────────────────────────────────────────────
 # SHARED AUGMENTATION
 # ─────────────────────────────────────────────
@@ -90,6 +100,7 @@ copy_paste: 0.0
 """
 
 
+
 # ═════════════════════════════════════════════
 # YOLOv8n
 # ═════════════════════════════════════════════
@@ -139,8 +150,17 @@ def train_v5():
     with open('hyp_v5.yaml', 'w') as f:
         f.write(V5_HYP)
 
+    # Auto-cloning yolov5 if missing
+    if not os.path.exists('yolov5'):
+        print("Cloning YOLOv5 repo...")
+        subprocess.run([GIT_EXE, 'clone', 'https://github.com/ultralytics/yolov5'])
+        subprocess.run([sys.executable, '-m', 'pip', 'install', '-r', 'yolov5/requirements.txt'])
+
+    if os.path.abspath('yolov5') not in sys.path:
+        sys.path.append(os.path.abspath('yolov5'))
+
     cmd = [
-        sys.executable, '-m', 'yolov5.train',
+        sys.executable, 'yolov5/train.py',
         '--data',     DATA_YAML,
         '--weights',  'yolov5n.pt',
         '--epochs',   str(EPOCHS),
@@ -173,9 +193,12 @@ def train_v6():
 
     if not os.path.exists('YOLOv6'):
         print("Cloning YOLOv6 repo...")
-        subprocess.run(['git', 'clone', 'https://github.com/meituan/YOLOv6'])
+        subprocess.run([GIT_EXE, 'clone', 'https://github.com/meituan/YOLOv6'])
         subprocess.run([sys.executable, '-m', 'pip', 'install',
                         '-r', 'YOLOv6/requirements.txt'])
+
+    if os.path.abspath('YOLOv6') not in sys.path:
+        sys.path.append(os.path.abspath('YOLOv6'))
 
     os.makedirs('YOLOv6/configs/custom', exist_ok=True)
     cfg = """_base_ = '../yolov6n_finetune.py'
@@ -190,20 +213,24 @@ data_aug = dict(
     with open('YOLOv6/configs/custom/yolov6n_grasp.py', 'w') as f:
         f.write(cfg)
 
+    # Set PYTHONPATH so yolov6 can find itself
+    env = os.environ.copy()
+    env['PYTHONPATH'] = os.path.abspath('YOLOv6') + os.pathsep + env.get('PYTHONPATH', '')
+
     cmd = [
-        sys.executable, 'YOLOv6/tools/train.py',
-        '--data-path',  DATA_YAML,
-        '--conf',       'YOLOv6/configs/yolov6n_finetune.py',
+        sys.executable, 'tools/train.py',
+        '--data-path',  os.path.abspath(DATA_YAML),
+        '--conf',       'configs/custom/yolov6n_grasp.py',
         '--epochs',     str(EPOCHS),
         '--img-size',   str(IMG_SIZE),
         '--batch-size', str(BATCH),
-        '--output-dir', f'{PROJECT_DIR}/yolov6n',
+        '--output-dir', os.path.abspath(f'{PROJECT_DIR}/yolov6n'),
         '--name',       'yolov6n',
     ]
     if DEVICE != 'cpu':
         cmd += ['--device', str(DEVICE)]
 
-    result = subprocess.run(cmd)
+    result = subprocess.run(cmd, cwd='YOLOv6', env=env)
     if result.returncode == 0:
         print(f"✓ YOLOv6n done → {PROJECT_DIR}/yolov6n/")
     else:
@@ -232,10 +259,11 @@ def export_all():
 
     pt5 = f"{PROJECT_DIR}/yolov5n/weights/best.pt"
     if os.path.exists(pt5):
+        # Using yolov5/export.py directly to ensure params are handled
         subprocess.run([
-            sys.executable, '-m', 'yolov5.export',
+            sys.executable, 'yolov5/export.py',
             '--weights', pt5, '--include', 'onnx',
-            '--imgsz', str(IMG_SIZE), '--opset', '12', '--simplify',
+            '--imgsz', str(IMG_SIZE), '--opset', '12'
         ])
         print(f"✓ yolov5n → {pt5.replace('.pt', '.onnx')}")
     else:
@@ -251,33 +279,72 @@ def export_all():
 # ═════════════════════════════════════════════
 # COMPARE RESULTS
 # ═════════════════════════════════════════════
+def run_val_if_missing(model_name, pt_path):
+    """Run validation programmatically if results.csv is missing."""
+    print(f"  [i] Running quick validation to get metrics for {model_name}...")
+    from ultralytics import YOLO
+    model = YOLO(pt_path)
+    # Redirect stdout to avoid spamming the screen during validation
+    with open(os.devnull, 'w') as f, contextlib.redirect_stdout(f):
+        metrics = model.val(data=DATA_YAML, imgsz=IMG_SIZE, split='val')
+    return metrics.box.map50, metrics.box.map
+
 def compare():
     import csv
+    import contextlib
 
     print("\n" + "="*60)
     print(f"{'Model':<12} {'mAP@0.5':>10} {'mAP@0.5:0.95':>14} {'OAK-D blob':>12}")
     print("-"*60)
 
-    models = {
-        'YOLOv5n' : (f"{PROJECT_DIR}/yolov5n/results.csv",  "✓ yes"),
-        'YOLOv6n' : (f"{PROJECT_DIR}/yolov6n/results.csv",  "✓ yes"),
-        'YOLOv8n' : (f"{PROJECT_DIR}/yolov8n/results.csv",  "✓ yes"),
-        'YOLO26n' : (f"{PROJECT_DIR}/yolo26n/results.csv",  "✗ not yet"),
-    }
-
-    for name, (path, blob) in models.items():
-        if not os.path.exists(path):
+    models_to_check = ['yolov5n', 'yolov6n', 'yolov8n', 'yolo26n']
+    
+    for name in models_to_check:
+        pt = f"{PROJECT_DIR}/{name}/weights/best.pt"
+        blob = "✓ yes" if name != 'yolo26n' else "✗ not yet"
+        
+        if not os.path.exists(pt):
             print(f"{name:<12} {'not trained yet':<26} {blob:>12}")
             continue
-        with open(path) as f:
+            
+        csv_path_inside_weights = pt.replace('weights/best.pt', 'weights/results.csv')
+        csv_path_parent = pt.replace('weights/best.pt', 'results.csv')
+        # Check specific validation folder for v8 if parent is missing
+        csv_path_val = f"{PROJECT_DIR}/{name}_val/results.csv" if name == 'yolov8n' else None
+        
+        csv_path = None
+        if os.path.exists(csv_path_parent):
+            csv_path = csv_path_parent
+        elif os.path.exists(csv_path_inside_weights):
+            csv_path = csv_path_inside_weights
+        elif csv_path_val and os.path.exists(csv_path_val):
+            csv_path = csv_path_val
+
+        if not csv_path:
+            # Fallback: run validation right now to get the numbers
+            try:
+                map50_val, map5095_val = run_val_if_missing(name, pt)
+                map50 = f"{map50_val:.5f}"
+                map5095 = f"{map5095_val:.5f}"
+                print(f"{name:<12} {map50:>10} {map5095:>14} {blob:>12}")
+            except Exception as e:
+                print(f"{name:<12} {'validation failed':<26} {blob:>12}")
+            continue
+            
+        with open(csv_path) as f:
             rows = [{k.strip(): v.strip() for k,v in r.items()}
                     for r in csv.DictReader(f)]
         if not rows:
             continue
-        best    = max(rows, key=lambda r: float(r.get('metrics/mAP50(B)', 0) or 0))
-        map50   = best.get('metrics/mAP50(B)',    'N/A')
-        map5095 = best.get('metrics/mAP50-95(B)', 'N/A')
-        print(f"{name:<12} {map50:>10} {map5095:>14} {blob:>12}")
+            
+        # YOLOv5/v8 use different CSV headers sometimes
+        try:
+            best    = max(rows, key=lambda r: float(r.get('metrics/mAP50(B)', r.get('metrics/mAP_0.5', 0)) or 0))
+            map50   = best.get('metrics/mAP50(B)',    best.get('metrics/mAP_0.5', 'N/A'))
+            map5095 = best.get('metrics/mAP50-95(B)', best.get('metrics/mAP_0.5:0.95', 'N/A'))
+            print(f"{name:<12} {map50:>10} {map5095:>14} {blob:>12}")
+        except:
+            print(f"{name:<12} {'error parsing CSV':<26} {blob:>12}")
 
     print("\nRECOMMENDATION:")
     print("  Best mAP with blob support → deploy on OAK-D")
@@ -292,7 +359,8 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--train',
-        choices=['v5','v6','v8','v26','all'], default='all')
+        choices=['v5','v6','v8','v26','all', 'none'], default='all',
+        help="Which model to train. Use 'none' to skip training and only run --export or --compare")
     parser.add_argument('--export',  action='store_true')
     parser.add_argument('--compare', action='store_true')
     args = parser.parse_args()
@@ -306,6 +374,7 @@ if __name__ == "__main__":
     elif args.train == 'v26': train_v26()
     elif args.train == 'v5':  train_v5()
     elif args.train == 'v6':  train_v6()
+    # If args.train == 'none', do nothing here.
 
     if args.export:
         export_all()
