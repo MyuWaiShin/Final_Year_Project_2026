@@ -1,0 +1,112 @@
+# OAK-D Lite Camera Calibration
+# Generated: 2026-02-19
+# Device ID: 194430100197F21200
+# Source: Factory calibration stored on-device (read via depthai)
+
+device:
+  id: "194430100197F21200"
+  model: "OAK-D Lite"
+  usb_speed: "HIGH (USB 2.0)"
+
+# ──────────────────────────────────────────
+# RGB Camera (CAM_A)
+# ──────────────────────────────────────────
+rgb:
+  socket: CAM_A
+
+  resolution_1080p:
+    width: 1920
+    height: 1080
+    fx: 1491.1250  # focal length X (px)
+    fy: 1491.1250  # focal length Y (px)
+    cx: 983.8411   # principal point X (px)
+    cy: 523.0750   # principal point Y (px)
+    distortion:    # k1, k2, p1, p2, k3
+      k1:  45.985882
+      k2: -29.899651
+      p1: -0.001229
+      p2:  0.000996
+      k3: 489.114441
+
+  resolution_480p:
+    width: 640
+    height: 480
+    fx: 497.0417
+    fy: 497.0417
+    cx: 327.9470
+    cy: 234.3583
+    distortion:
+      k1:  45.985882
+      k2: -29.899651
+      p1: -0.001229
+      p2:  0.000996
+      k3: 489.114441
+
+# ──────────────────────────────────────────
+# Left Mono Camera (CAM_B)
+# ──────────────────────────────────────────
+left_mono:
+  socket: CAM_B
+  width: 640
+  height: 400
+  fx: 452.7069
+  fy: 452.7069
+  cx: 322.6911
+  cy: 202.1088
+  distortion:
+    k1:  -8.900260
+    k2:  29.735323
+    p1:  -0.001912
+    p2:   0.001297
+    k3: -23.371679
+
+# ──────────────────────────────────────────
+# Right Mono Camera (CAM_C)
+# ──────────────────────────────────────────
+right_mono:
+  socket: CAM_C
+  width: 640
+  height: 400
+  fx: 451.6805
+  fy: 451.6805
+  cx: 310.0662
+  cy: 186.9418
+  distortion:
+    k1:  34.910198
+    k2: -258.857300
+    p1:  -0.000214
+    p2:  -0.001190
+    k3: 457.503571
+
+# ──────────────────────────────────────────
+# Stereo Configuration
+# ──────────────────────────────────────────
+stereo:
+  baseline_mm: 75.00
+  baseline_cm: 7.50
+  translation_vector_cm: [-7.5, 0.0, 0.0]  # left → right
+
+  rotation_matrix_left_to_right:
+    - [ 0.999845, -0.006547, -0.016336]
+    - [ 0.006575,  0.999977,  0.001688]
+    - [ 0.016325, -0.001796,  0.999865]
+
+# ──────────────────────────────────────────
+# Depth Range
+# ──────────────────────────────────────────
+depth:
+  min_mm: 354       # theoretical (disparity = 96 px)
+  max_mm: 8488      # theoretical (disparity = 4 px)
+  practical_min_mm: 200
+  practical_max_mm: 10000
+  focal_length_left_px: 452.7
+
+# ──────────────────────────────────────────
+# 3D Projection Formula (pixel → metres)
+# ──────────────────────────────────────────
+# Z = depth_mm / 1000.0
+# X = (u - cx) * Z / fx     (+X = right)
+# Y = (v - cy) * Z / fy     (+Y = down)
+# Z                         (+Z = away from camera)
+#
+# Use rgb.resolution_480p values when running at 640x480
