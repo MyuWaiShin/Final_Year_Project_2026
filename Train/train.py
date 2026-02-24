@@ -285,14 +285,41 @@ def export_all():
 # COMPARE RESULTS
 # ═════════════════════════════════════════════
 def run_val_if_missing(model_name, pt_path):
-    """Run validation programmatically if results.csv is missing."""
+    """Run validation via subprocess if results.csv is missing to avoid import conflicts."""
     print(f"  [i] Running quick validation to get metrics for {model_name}...")
-    from ultralytics import YOLO
-    model = YOLO(pt_path)
-    # Redirect stdout to avoid spamming the screen during validation
-    with open(os.devnull, 'w') as f, contextlib.redirect_stdout(f):
-        metrics = model.val(data=DATA_YAML, imgsz=IMG_SIZE, split='val')
-    return metrics.box.map50, metrics.box.map
+    import json
+    
+    val_dir = f"{PROJECT_DIR}/{model_name}_val"
+    os.makedirs(val_dir, exist_ok=True)
+    
+    # Run yolo val in a subprocess to avoid sys.path pollution from yolov5
+    cmd = [
+        sys.executable, '-m', 'ultralytics.cfg', 'val',
+        f'model={os.path.abspath(pt_path)}',
+        f'data={os.path.abspath(DATA_YAML)}',
+        f'imgsz={IMG_SIZE}',
+        f'project={os.path.abspath(PROJECT_DIR)}',
+        f'name={model_name}_val',
+        'exist_ok=True'
+    ]
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    
+    # YOLO validation outputs a results.json file
+    json_path = f"{val_dir}/results.json"
+    if os.path.exists(json_path):
+        try:
+            with open(json_path) as f:
+                data = json.load(f)
+            # Find the best epoch or just the only epoch in val
+            if isinstance(data, list) and len(data) > 0:
+                best = data[-1]
+                map50 = best.get('metrics/mAP50(B)', 0)
+                map5095 = best.get('metrics/mAP50-95(B)', 0)
+                return map50, map5095
+        except Exception:
+            pass
+            
+    raise Exception("Validation failed to produce metrics")
 
 def compare():
     import csv
@@ -332,7 +359,9 @@ def compare():
                 map5095 = f"{map5095_val:.5f}"
                 print(f"{name:<12} {map50:>10} {map5095:>14} {blob:>12}")
             except Exception as e:
+                import traceback
                 print(f"{name:<12} {'validation failed':<26} {blob:>12}")
+                traceback.print_exc()
             continue
             
         with open(csv_path) as f:
