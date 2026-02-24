@@ -27,6 +27,7 @@ DATA.YAML:
 import os
 import sys
 import subprocess
+import contextlib
 
 # Fix Windows console encoding for checkpoints and emojis
 if sys.platform == 'win32':
@@ -295,7 +296,6 @@ def run_val_if_missing(model_name, pt_path):
 
 def compare():
     import csv
-    import contextlib
 
     print("\n" + "="*60)
     print(f"{'Model':<12} {'mAP@0.5':>10} {'mAP@0.5:0.95':>14} {'OAK-D blob':>12}")
