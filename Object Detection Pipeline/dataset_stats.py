@@ -23,8 +23,10 @@ from pathlib import Path
 # CONFIGURATION
 # ============================================================
 
-SCRIPT_DIR  = Path(__file__).resolve().parent
-DATA_DIR    = SCRIPT_DIR.parent / "data"
+# [PATH CONFIGURATION]
+# Set this to the absolute path of your data folder. 
+# This folder should contain the 'images' and 'labels' subfolders.
+DATA_DIR = Path(r"c:\Users\MS3433\Downloads\Data_Preparation_V3\data")
 
 RAW_VIDEO_DIR = DATA_DIR / "raw_videos"
 IMAGES_DIR    = DATA_DIR / "images"

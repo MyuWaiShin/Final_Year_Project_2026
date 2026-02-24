@@ -1,0 +1,26 @@
+# Environment Setup for OAK-D Lite Training (RTX 5080)
+
+# STEP 1: Enable Windows Long Paths (Highly Recommended)
+# Run fix_long_paths.ps1 or run this in a terminal as Admin:
+# Set-ItemProperty 'HKLM:\System\CurrentControlSet\Control\FileSystem' -Name 'LongPathsEnabled' -Value 1
+
+# STEP 2: Update pip
+python -m pip install --upgrade pip
+
+# STEP 3: Install Core PyTorch first
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+# STEP 4: Install YOLOv8 (Ultralytics)
+pip install ultralytics
+
+# STEP 5: Install YOLOv5 Requirements
+pip install -r https://raw.githubusercontent.com/ultralytics/yolov5/master/requirements.txt
+
+# STEP 6: Install OAK-D and ONNX (Staged to avoid path errors)
+pip install depthai depthai-sdk
+pip install onnx 
+# Note: If onnxsim fails again, we can skip it or install a specific wheel
+pip install onnxsim 
+
+# STEP 7: Utilities
+pip install pandas matplotlib pyyaml tqdm seaborn

@@ -1,0 +1,7 @@
+path: c:/Users/MS3433/Downloads/Data_Preparation_V3/data
+train: images/train
+val: images/val
+test: images/test
+
+nc: 2
+names: ['cube', 'cylinder']
