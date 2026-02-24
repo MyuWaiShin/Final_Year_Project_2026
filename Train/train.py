@@ -28,6 +28,10 @@ import os
 import sys
 import subprocess
 
+# Fix Windows console encoding for checkpoints and emojis
+if sys.platform == 'win32':
+    sys.stdout.reconfigure(encoding='utf-8')
+
 # ─────────────────────────────────────────────
 # CHANGE THESE
 # ─────────────────────────────────────────────
