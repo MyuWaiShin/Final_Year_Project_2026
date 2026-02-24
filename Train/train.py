@@ -287,14 +287,13 @@ def export_all():
 def run_val_if_missing(model_name, pt_path):
     """Run validation via subprocess if results.csv is missing to avoid import conflicts."""
     print(f"  [i] Running quick validation to get metrics for {model_name}...")
-    import json
+    import re
     
     val_dir = f"{PROJECT_DIR}/{model_name}_val"
     os.makedirs(val_dir, exist_ok=True)
     
-    # Run yolo val in a subprocess to avoid sys.path pollution from yolov5
     cmd = [
-        sys.executable, '-m', 'ultralytics.cfg', 'val',
+        'yolo', 'val', 'task=detect',
         f'model={os.path.abspath(pt_path)}',
         f'data={os.path.abspath(DATA_YAML)}',
         f'imgsz={IMG_SIZE}',
@@ -302,24 +301,31 @@ def run_val_if_missing(model_name, pt_path):
         f'name={model_name}_val',
         'exist_ok=True'
     ]
-    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     
-    # YOLO validation outputs a results.json file
-    json_path = f"{val_dir}/results.json"
-    if os.path.exists(json_path):
-        try:
-            with open(json_path) as f:
-                data = json.load(f)
-            # Find the best epoch or just the only epoch in val
-            if isinstance(data, list) and len(data) > 0:
-                best = data[-1]
-                map50 = best.get('metrics/mAP50(B)', 0)
-                map5095 = best.get('metrics/mAP50-95(B)', 0)
-                return map50, map5095
-        except Exception:
-            pass
+    # We must use shell=True on Windows if 'yolo' is a script in the venv Scripts folder
+    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, shell=(sys.platform == 'win32'))
+    
+    output = result.stdout
+    # Looking for a line like: all  379  3847  0.923  0.946  0.974  0.906
+    # Ultralytics val output format: Class Images Instances Box(P R mAP50 mAP50-95)
+    
+    map50, map5095 = 0.0, 0.0
+    for line in output.splitlines():
+        if line.strip().startswith('all'):
+            parts = line.split()
+            if len(parts) >= 7:
+                try:
+                    map50 = float(parts[5])
+                    map5095 = float(parts[6])
+                except ValueError:
+                    pass
+            break
             
-    raise Exception("Validation failed to produce metrics")
+    if map50 > 0:
+        return map50, map5095
+        
+    print(output) # Print output if it failed to parse for debugging
+    raise Exception("Validation failed to produce parsable metrics")
 
 def compare():
     import csv
