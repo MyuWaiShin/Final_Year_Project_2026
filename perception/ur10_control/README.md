@@ -17,17 +17,19 @@ This system automates the pick-and-place operation for multiple objects using:
 | File | Purpose |
 |------|---------|
 | `pick_and_place.py` | Complete pick-and-place automation system |
-| `gripper_with_detection.py` | Gripper control with calibrated object detection |
+| `grip_control_with_slip_detection.py` | Gripper control with continuous close loop and slip detection |
+| `gripper_with_detection.py` | Earlier version — basic gripper control with calibrated detection |
 | `dashboard_gripper.py` | Basic gripper control via Dashboard Server |
-| `read_base_frame.py` | Real-time TCP position reader |
+| `read_robot_frame.py` | Real-time TCP position reader |
 | `check_voltage.py` | Diagnostic tool for gripper voltage verification |
 
 ### Development Journey
 
-1. **dashboard_gripper.py** - Initial connection and basic gripper control
-2. **read_base_frame.py** - Position reading for recording coordinates
-3. **gripper_with_detection.py** - Calibrated sensor feedback and object detection
-4. **pick_and_place.py** - Full automation with parallel monitoring
+1. **dashboard_gripper.py** — Initial connection and basic gripper control
+2. **read_robot_frame.py** — Position reading for recording coordinates
+3. **gripper_with_detection.py** — Calibrated sensor feedback and object detection
+4. **grip_control_with_slip_detection.py** — Continuous close loop + automatic slip detection
+5. **pick_and_place.py** — Full automation with parallel monitoring
 
 ## 🚀 Quick Start
 
@@ -51,7 +53,18 @@ ROBOT_IP = "192.168.8.102"  # Change to your robot's IP
 python pick_and_place.py
 ```
 
-**Test gripper with detection:**
+**Gripper control with continuous close + slip detection:**
+```bash
+python grip_control_with_slip_detection.py
+```
+
+Commands at runtime:
+- `c` — Start closing (loop runs, auto-stops when fully closed, slip detection active)
+- `o` — Open gripper (stops close loop, opens to 100mm)
+- `s` — Show live status (width, voltage, DI8, force, slip state)
+- `q` — Quit
+
+**Test earlier gripper version:**
 ```bash
 python gripper_with_detection.py
 ```
@@ -217,8 +230,23 @@ All positions are in the **robot base frame**:
 
 ### Required UR Programs
 Create these `.urp` programs on the teach pendant:
-- `grip_open.urp` - Opens gripper to 110mm
-- `grip_close.urp` - Closes gripper with force detection
+
+- **`grip_open.urp`** — Single `RG2(100mm, 40N)` action, no loop.
+- **`grip_close.urp`** — Structure: `Loop > RG2(0mm, 40N) > Wait 1.0`
+  - The Loop runs continuously until stopped by the code via dashboard `stop` command.
+  - **Set Wait to 1.0s** (not 0.1s) to minimise command queue buildup and prevent ticking when switching to open.
+
+### Gripper Control Architecture
+
+`grip_control_with_slip_detection.py` uses:
+- **Port 29999 (Dashboard)** — `stop` / `load` / `play` for `.urp` programs. `rg_grip()` is a URCap function that only executes inside `.urp` context, not via raw URScript.
+- **Port 30002 (Secondary Client)** — Persistent connection for reading AI2 (width voltage) and DI8 (force limit) in real time.
+
+Slip detection flow:
+1. `grip_close.urp` loop runs → gripper closes and holds
+2. After 2.5s settle, background monitor activates
+3. If `DI8 HIGH + width < 11mm` → auto-stop the loop (fully closed or slipped)
+4. If object was held (`width > 12mm`) before the drop → prints `[SLIP DETECTED]`
 
 ### Gripper Configuration
 - Ensure RG2 gripper is properly installed
