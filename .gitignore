@@ -38,3 +38,7 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.bak
+
+# Inference outputs (generated — do not commit)
+Object Detection Pipeline/inference/test_images/
+Object Detection Pipeline/inference/inference_results/
