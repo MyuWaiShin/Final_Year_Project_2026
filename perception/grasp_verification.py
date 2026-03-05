@@ -14,7 +14,7 @@ except ImportError:
     sys.exit(1)
 
 # --- Configuration ---
-MODEL_PATH = Path(r"C:\Users\myuwa\OneDrive - Middlesex University\Major Project\Datasets\runs\train\yolov8n\weights\best.onnx")
+MODEL_PATH = Path(r"C:\Users\myuwa\OneDrive - Middlesex University\FYP Datasets\runs\train\yolov8n\weights\best.onnx")
 DISPLACEMENT_THRESHOLD = 15.0  # Pixels: Below this is a "Complete Miss"
 TOLERANCE_RADIUS = 50.0        # Pixels: Within this is a "Nudge" (near P1)
                                # Beyond this or no detection = Success (Moved/Removed)

@@ -27,11 +27,12 @@ import numpy as np
 from pathlib import Path
 import onnxruntime as ort
 import time
+from collections import deque
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Config
 # ─────────────────────────────────────────────────────────────────────────────
-MODEL_PATH = Path(r"C:\Users\myuwa\OneDrive - Middlesex University\Major Project\Datasets\runs\train\yolov8n\weights\best.onnx")
+MODEL_PATH = Path(r"C:\Users\myuwa\OneDrive - Middlesex University\FYP Datasets\runs\train\yolov8n\weights\best.onnx")
 CONF_THRESHOLD = 0.8
 IOU_THRESHOLD  = 0.45
 
@@ -259,11 +260,16 @@ class PoseEstimator:
         Rz – gripper rotation around the camera's Z axis
     """
 
+    # Number of frames to keep for temporal depth smoothing
+    _DEPTH_HISTORY = 8
+
     def __init__(self):
         self.fx  = None
         self.fy  = None
         self.cx0 = None
         self.cy0 = None
+        # Rolling depth history per class_id  →  deque of Z_mm values
+        self._z_hist: dict[int, deque] = {}
 
     def load_intrinsics(self, device):
         """Read real camera intrinsics from the OAK-D calibration storage."""
@@ -279,7 +285,8 @@ class PoseEstimator:
               f"cx={self.cx0:.1f}  cy={self.cy0:.1f}")
 
     def compute(self, pixel_cx: int, pixel_cy: int,
-                depth_frame: np.ndarray, gripper_angle: float) -> dict:
+                depth_frame: np.ndarray, gripper_angle: float,
+                class_id: int = 0) -> dict:
         """
         Returns the full 3D pose for one detection.
 
@@ -294,7 +301,7 @@ class PoseEstimator:
         if depth_frame is None:
             return {'valid': False}
 
-        # Sample a small patch around the centre for a robust depth reading
+        # ── Spatial patch: median over a 5px radius ────────────────────────
         r   = 5
         h_d, w_d = depth_frame.shape
         px1 = max(0, pixel_cx - r);  px2 = min(w_d, pixel_cx + r + 1)
@@ -305,7 +312,13 @@ class PoseEstimator:
         if good.size == 0:
             return {'valid': False}
 
-        Z_mm = float(np.median(good))
+        Z_mm_raw = float(np.median(good))
+
+        # ── Temporal smoothing: rolling median over last N frames ─────────
+        if class_id not in self._z_hist:
+            self._z_hist[class_id] = deque(maxlen=self._DEPTH_HISTORY)
+        self._z_hist[class_id].append(Z_mm_raw)
+        Z_mm = float(np.median(self._z_hist[class_id]))
         Z    = Z_mm / 1000.0   # convert mm → metres
 
         # Camera intrinsics – fall back to sensible defaults if not loaded yet
@@ -427,7 +440,7 @@ def draw_pose(frame, detections, depth_frame, pose_estimator):
             cv2.arrowedLine(frame, (cx, cy), (ax, ay), (0, 255, 255), 2, tipLength=0.3)
 
             # ── 3-D Pose ──────────────────────────────────────────────────────
-            pose = pose_estimator.compute(cx, cy, depth_frame, gripper_angle)
+            pose = pose_estimator.compute(cx, cy, depth_frame, gripper_angle, class_id=cls_id)
             det['pose'] = pose
 
             if pose['valid']:
@@ -531,7 +544,10 @@ def main():
  
         roi = None
         roi_sel = ROISelector("Pose Estimation - Cubes / Cylinders / Arcs")
-        smoother = DetectionSmoother(max_age=15, min_hits=3)
+        # dist_threshold=80: detections within 80px of existing track = same object
+        # min_hits=5: must appear in 5 consecutive frames before showing
+        # max_age=8: drop track after 8 missed frames (was 15 — shorter avoids ghost boxes)
+        smoother = DetectionSmoother(max_age=8, min_hits=5, dist_threshold=80)
 
         fps_count = 0
         fps_time  = time.time()

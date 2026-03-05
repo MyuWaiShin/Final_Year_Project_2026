@@ -563,7 +563,7 @@ class ROISelector:
 
 def main():
     # Model path
-    model_path = Path(r"C:\Users\myuwa\OneDrive - Middlesex University\Major Project\Datasets\runs\train\yolov8n\weights\best.onnx")
+    model_path = Path(r"C:\Users\myuwa\OneDrive - Middlesex University\FYP Datasets\runs\train\yolov8n\weights\best.onnx")
     
     if not model_path.exists():
         print("=" * 60)
