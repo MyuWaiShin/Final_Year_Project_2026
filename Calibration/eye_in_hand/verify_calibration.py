@@ -157,16 +157,30 @@ def main():
     K = np.array([[intr["fx"],          0, intr["cx"]],
                   [         0, intr["fy"], intr["cy"]],
                   [         0,          0,          1]], dtype=np.float64)
-    dist = np.array(data["distortion"], dtype=np.float64)
+    # Distortion: Use None (zero) for axes to avoid stretching weirdness
+    # (since the axes are close to center anyway)
     
     # 3. Diagnostics
     reproj_err = data.get("board_reproj_mean_px", 0.0)
-    best_method = data.get("best_method", "Unknown")
+    best_method_name = data.get("best_method", "Unknown")
+    all_methods = data.get("all_methods", {})
+    
+    current_method_idx = 0
+    method_names = list(all_methods.keys())
+    # Try to start at the best one
+    if best_method_name in method_names:
+        current_method_idx = method_names.index(best_method_name)
 
     # Validation check
-    if t_cam2tcp[2, 0] < 0:
-        print("\n[WARNING] Loaded calibration has a negative Z-translation!")
-        print("The 3D axes might not be visible as they are projected 'behind' the camera.")
+    if np.array(data["t_cam2tcp"])[2] > 0:
+        # Note: If t_cam2tcp_z is positive, then Camera is forward of TCP.
+        # Usually for Eye-in-Hand, Camera is BEHIND TCP, so t_z should be negative.
+        print("\n[INFO] Loaded calibration has positive Z translation.")
+    
+    cv2.namedWindow("Calibration Verification")
+    print("\nControls:")
+    print("  [1-5] Switch Calibration Methods")
+    print("  [q]   Quit\n")
 
     # Setup Robot Connection
     tcp_poller = TCPPoller(ROBOT_IP)
@@ -199,36 +213,44 @@ def main():
 
                 tcp = tcp_poller.pose
                 
-                # If we have a live robot pose, project the TCP onto the camera view
+                # Get current method data
+                m_name = method_names[current_method_idx]
+                m_data = all_methods[m_name]
+                R_cam2tcp = np.array(m_data["R"])
+                t_cam2tcp = np.array(m_data["t"]).reshape(3, 1)
+
                 if tcp is not None:
-                    # The camera is mounted ON the gripper. 
-                    # If we consider the Camera to be at Origin (0,0,0), then the vector 
-                    # pointing FROM the Camera TO the Gripper is exactly 't_cam2tcp'.
-                    # We can visualize the gripper (TCP) in the camera image directly:
-                    
-                    # We have H_cam2tcp. To project TCP points in the Camera frame, 
-                    # we need H_tcp2cam, which is the inverse of H_cam2tcp.
+                    # Show the TCP frame in the camera image
+                    # Use the inverse to project TCP origin (0,0,0) into Camera pixels
                     R_tcp2cam = R_cam2tcp.T
                     t_tcp2cam = -R_tcp2cam @ t_cam2tcp
                     
-                    rvec, _ = cv2.Rodrigues(R_tcp2cam)
+                    r_vec, _ = cv2.Rodrigues(R_tcp2cam)
                     
-                    # Draw a 3cm access frame (shorter looks more professional)
-                    draw_axes(frame, rvec, t_tcp2cam, K, dist, length=0.03)
+                    # Draw a 3cm access frame with labels and NO distortion
+                    draw_axes(frame, r_vec, t_tcp2cam, K, None, length=0.03)
 
                     text = f"Live TCP: ({tcp[0]*1000:+.0f}, {tcp[1]*1000:+.0f}, {tcp[2]*1000:+.0f}) mm"
-                    cv2.putText(frame, text, (15, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                    cv2.putText(frame, text, (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
                     
                     # Diagnostic HUD
-                    diag_text = f"Method: {best_method} | Mean Reproj: {reproj_err:.2f} px"
-                    cv2.putText(frame, diag_text, (15, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+                    diag_text = f"Method [{current_method_idx+1}/5]: {m_name}"
+                    cv2.putText(frame, diag_text, (15, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+                    info_text = f"Consistency: {reproj_err:.2f} px (Mean)"
+                    cv2.putText(frame, info_text, (15, 85), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
                 else:
                     cv2.putText(frame, "Waiting for Robot TCP...", (15, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
 
                 cv2.imshow("Calibration Verification", frame)
-
-                if cv2.waitKey(1) == ord('q'):
+                
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('q'):
                     break
+                elif ord('1') <= key <= ord('5'):
+                    idx = key - ord('1')
+                    if idx < len(method_names):
+                        current_method_idx = idx
+                        print(f"Switched to method: {method_names[idx]}")
     finally:
         tcp_poller.stop()
         cv2.destroyAllWindows()

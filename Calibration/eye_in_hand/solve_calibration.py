@@ -211,9 +211,7 @@ def main():
     _, camera_matrix_opt, dist_coeffs_opt, rvecs_b2c, tvecs_b2c = cv2.calibrateCamera(
         obj_pts_list, img_pts_list, (w, h),
         camera_matrix.copy(), dist_coeffs.copy(),
-        flags=cv2.CALIB_USE_INTRINSIC_GUESS |
-              cv2.CALIB_FIX_PRINCIPAL_POINT  |
-              cv2.CALIB_FIX_FOCAL_LENGTH)
+        flags=cv2.CALIB_USE_INTRINSIC_GUESS)
 
     # Use optimized parameters for error calculation and final saving
     camera_matrix = camera_matrix_opt
@@ -271,17 +269,21 @@ def main():
         print("\n  ERROR: All methods failed. Collect more diverse samples.")
         return
 
-    # ── Step 5: pick method with best board consistency ─────────────
+    # ── Step 5: pick method (Median Selection for Stability) ────────────
     print(f"\n  Evaluating methods by board consistency (lower is better):")
     scored_results = []
     for name, (R, t) in results.items():
-        consistency_err, _ = eval_handeye(R, t, R_g2b_list, t_g2b_list, rvecs_b2c, tvecs_b2c)
-        print(f"    {name:<12}: {consistency_err*1000:6.2f} mm")
+        consistency_err, mean_pos = eval_handeye(R, t, R_g2b_list, t_g2b_list, rvecs_b2c, tvecs_b2c)
+        print(f"    {name:<12}: {consistency_err*1000:6.2f} mm | Board at ({mean_pos[0]:.3f}, {mean_pos[1]:.3f}, {mean_pos[2]:.3f})")
         scored_results.append((consistency_err, name, R, t))
     
-    scored_results.sort()
-    best_consistency, best_name, R_best, t_best = scored_results[0]
-    print(f"\n  Best method (best consistency): {best_name} ({best_consistency*1000:.2f} mm)")
+    # Use Median of translations as the "safe" anchor (user reports it was closer)
+    t_stack = np.stack([v[1].ravel() for v in results.values()])
+    t_median = np.median(t_stack, axis=0)
+    best_name = min(results, key=lambda n: np.linalg.norm(results[n][1].ravel() - t_median))
+    
+    R_best, t_best = results[best_name]
+    print(f"\n  Best method (Median anchor): {best_name}")
 
     # ── Step 6: print and save ────────────────────────────────────────────────
     print(f"\n  R_cam2tcp:\n{np.round(R_best, 5)}")
