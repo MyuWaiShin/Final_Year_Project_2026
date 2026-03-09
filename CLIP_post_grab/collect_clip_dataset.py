@@ -29,6 +29,17 @@ from pathlib import Path
 import time
 from typing import Optional
 import os
+import sys
+
+# Add project root to sys.path to resolve module imports like 'Perception'
+PROJECT_ROOT = Path(__file__).parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.append(str(PROJECT_ROOT))
+from datetime import datetime
+from pathlib import Path
+import time
+from typing import Optional
+import os
 
 import cv2
 
@@ -41,7 +52,7 @@ except ImportError:  # depthai is only needed when using the OAK-D
 
 try:
     # Uses the same UR10Controller you already use for gripper_with_detection.
-    from perception.ur10_control.gripper_with_detection import UR10Controller
+    from Perception.ur10_control.gripper_with_detection import UR10Controller
 except Exception as e:  # pragma: no cover - import error only at runtime
     UR10Controller = None  # type: ignore[assignment]
     _IMPORT_ERROR = e
@@ -54,15 +65,23 @@ WINDOW_NAME = "CLIP Gripper Dataset Collection"
 
 def init_output_dirs(
     root: Optional[str],
-) -> tuple[Path, Path, Path, Path, "csv.TextIOWrapper", csv.DictWriter]:
+) -> tuple[Path, dict, dict, "csv.TextIOWrapper", csv.DictWriter]:
     script_dir = Path(__file__).parent
     base = Path(root).expanduser().resolve() if root else (script_dir / "clip_dataset").resolve()
 
-    holding_dir = base / "holding"
-    empty_dir = base / "empty"
-    unknown_dir = base / "unknown"
+    crop_dirs = {
+        "holding": base / "cropped" / "holding",
+        "empty": base / "cropped" / "empty",
+        "unknown": base / "cropped" / "unknown",
+    }
+    
+    full_dirs = {
+        "holding": base / "full" / "holding",
+        "empty": base / "full" / "empty",
+        "unknown": base / "full" / "unknown",
+    }
 
-    for d in (holding_dir, empty_dir, unknown_dir):
+    for d in list(crop_dirs.values()) + list(full_dirs.values()):
         d.mkdir(parents=True, exist_ok=True)
 
     meta_path = base / "metadata.csv"
@@ -84,7 +103,7 @@ def init_output_dirs(
         writer.writeheader()
         meta_file.flush()
 
-    return base, holding_dir, empty_dir, unknown_dir, meta_file, writer
+    return base, crop_dirs, full_dirs, meta_file, writer
 
 
 def connect_robot(robot_ip: str) -> Optional[UR10Controller]:
@@ -130,6 +149,11 @@ def open_oak_camera() -> tuple["dai.Device", "dai.DataOutputQueue"]:
     cam_rgb.setColorOrder(dai.ColorCameraProperties.ColorOrder.BGR)
     cam_rgb.setFps(30)
 
+    # 1. Camera Control input
+    controlIn = pipeline.create(dai.node.XLinkIn)
+    controlIn.setStreamName("control")
+    controlIn.out.link(cam_rgb.inputControl)
+
     xout = pipeline.create(dai.node.XLinkOut)
     xout.setStreamName("video")
     cam_rgb.video.link(xout.input)
@@ -141,6 +165,14 @@ def open_oak_camera() -> tuple["dai.Device", "dai.DataOutputQueue"]:
     device.startPipeline(pipeline)
 
     q_rgb = device.getOutputQueue("video", maxSize=4, blocking=False)
+    q_control = device.getInputQueue("control")
+    
+    # Enable continuous auto-focus to keep the gripper sharp as it moves
+    ctrl = dai.CameraControl()
+    ctrl.setAutoFocusMode(dai.CameraControl.AutoFocusMode.CONTINUOUS_VIDEO)
+    q_control.send(ctrl)
+    print("→ Camera Auto-Focus Enabled.")
+
     return device, q_rgb
 
 
@@ -192,9 +224,8 @@ def main() -> None:
 
     (
         base_dir,
-        holding_dir,
-        empty_dir,
-        unknown_dir,
+        crop_dirs,
+        full_dirs,
         meta_file,
         writer,
     ) = init_output_dirs(args.output_root)
@@ -244,8 +275,33 @@ def main() -> None:
                     print("Failed to grab frame from webcam.")
                     break
 
-            # Resize display for manageable window size (640x360)
+            # ROI Cropping: A wide rectangle at the bottom to catch the open gripper
+            # Based on the user image: it needs to span almost the whole bottom width
+            h, w = frame.shape[:2]
+            
+            crop_w = 1400  # Wide enough to catch both open fingers
+            crop_h = 600   # Tall enough to see the object being grasped, but not too high
+            
+            # Start the crop at the very bottom edge to ensure we see the tips and base
+            cx = w // 2
+            cy = h - (crop_h // 2) - 10  
+            
+            x1 = max(0, cx - crop_w // 2)
+            y1 = max(0, cy - crop_h // 2)
+            x2 = min(w, x1 + crop_w)
+            y2 = min(h, y1 + crop_h)
+            
+            # Extract the crop for saving
+            crop_frame = frame[y1:y2, x1:x2].copy()
+
+            # For display, we show both the full frame (scaled) and the crop
             display = cv2.resize(frame, (640, 360))
+            # Draw the ROI box on the display
+            scale_x, scale_y = 640/w, 360/h
+            cv2.rectangle(display, 
+                          (int(x1*scale_x), int(y1*scale_y)), 
+                          (int(x2*scale_x), int(y2*scale_y)), 
+                          (255, 0, 0), 2)
             
             label_text = last_label if last_label is not None else "unknown"
             status = f"label={label_text}"
@@ -263,6 +319,13 @@ def main() -> None:
                 (0, 255, 0),
                 2,
             )
+            
+            # Show the actual CROP in a small dedicated window
+            # Scale down the preview window (maintaining the wide aspect ratio)
+            preview_w = 600
+            preview_h = int(preview_w * (crop_h / crop_w))
+            display_crop = cv2.resize(crop_frame, (preview_w, preview_h))
+            cv2.imshow(f"CLIP CROP ({crop_w}x{crop_h})", display_crop)
             cv2.imshow(WINDOW_NAME, display)
 
             key = cv2.waitKey(1) & 0xFF
@@ -311,21 +374,20 @@ def main() -> None:
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
                 label = last_label or "unknown"
 
-                if label == "holding":
-                    out_dir = holding_dir
-                elif label == "empty":
-                    out_dir = empty_dir
-                else:
-                    out_dir = unknown_dir
+                crop_dir = crop_dirs.get(label, crop_dirs["unknown"])
+                full_dir = full_dirs.get(label, full_dirs["unknown"])
 
                 filename = f"{label}_{timestamp}.png"
-                save_path = out_dir / filename
-                cv2.imwrite(str(save_path), frame)
+                crop_path = crop_dir / filename
+                full_path = full_dir / filename
+                
+                cv2.imwrite(str(crop_path), crop_frame)
+                cv2.imwrite(str(full_path), frame)
 
                 writer.writerow(
                     {
                         "timestamp": timestamp,
-                        "filename": str(save_path.relative_to(base_dir)),
+                        "filename": str(crop_path.relative_to(base_dir)),
                         "label": label,
                         "gripper_width_mm": last_width if last_width is not None else "",
                         "voltage_ai2": f"{last_voltage:.4f}" if last_voltage is not None else "",
@@ -334,7 +396,7 @@ def main() -> None:
                     }
                 )
                 meta_file.flush()
-                print(f"Saved 1080p frame -> {save_path} (label={label})")
+                print(f"Saved crop -> {crop_path} and full -> {full_path} (label={label})")
 
             elif key == ord("v"):
                 if controller is None:
