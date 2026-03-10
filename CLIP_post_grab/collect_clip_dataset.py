@@ -258,7 +258,9 @@ def main() -> None:
     print("  'c' : close gripper (grip_close.urp) and update grasp state")
     print("  'v' : move to VIEW POSE (lift for focus)")
     print("  'h' : move to HOME POSE (return to table)")
-    print("  's' : save current frame using latest grasp label")
+    print("  's' : save current frame using sensor's auto-label (green text)")
+    print("  '1' : FORCE save as 'holding' (overrides sensor)")
+    print("  '0' : FORCE save as 'empty' (overrides sensor)")
     print("  'q' : quit")
     print("-" * 70)
 
@@ -370,9 +372,16 @@ def main() -> None:
                     f"force={last_force}, object_detected={last_object} -> label='{last_label}'"
                 )
 
-            elif key == ord("s"):
+            elif key in [ord("s"), ord("1"), ord("0")]:
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-                label = last_label or "unknown"
+                
+                # Determine label based on key press
+                if key == ord("1"):
+                    label = "holding"
+                elif key == ord("0"):
+                    label = "empty"
+                else:
+                    label = last_label or "unknown"
 
                 crop_dir = crop_dirs.get(label, crop_dirs["unknown"])
                 full_dir = full_dirs.get(label, full_dirs["unknown"])
