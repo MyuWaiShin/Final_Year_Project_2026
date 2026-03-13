@@ -68,9 +68,11 @@ class SafetyGuard:
             data = json.load(f)
 
         lim = data["safe_limits"]
-        self.safe_x: tuple = tuple(lim["SAFE_X"])   # (min, max) metres
-        self.safe_y: tuple = tuple(lim["SAFE_Y"])
-        self.safe_z: tuple = tuple(lim["SAFE_Z"])
+        # Sort each pair so we always have (min, max) — the recording order
+        # depends on which direction you jogged, so the values can be inverted.
+        self.safe_x: tuple = tuple(sorted(lim["SAFE_X"]))
+        self.safe_y: tuple = tuple(sorted(lim["SAFE_Y"]))
+        self.safe_z: tuple = tuple(sorted(lim["SAFE_Z"]))
 
         self.floor_clearance_m = floor_clearance_m
         self.warn_margin_m     = warn_margin_m

@@ -178,13 +178,13 @@ def main():
         # Detect Charuco
         charuco_corners, charuco_ids, _, _ = charuco_detector.detectBoard(gray)
 
-        if charuco_corners is None or len(charuco_corners) < 4:
+        if charuco_corners is None or len(charuco_corners) < 6:
             # Fallback to the detection we already stored in the JSON
-            if "charuco_corners" in s and s["charuco_corners"]:
+            if "charuco_corners" in s and s["charuco_corners"] and len(s["charuco_corners"]) >= 6:
                 charuco_corners = np.array(s["charuco_corners"], dtype=np.float32).reshape(-1, 1, 2)
                 charuco_ids = np.array(s["charuco_ids"], dtype=np.int32).reshape(-1, 1)
             else:
-                print(f"  [SKIP] Board not found in {img_path.name}")
+                print(f"  [SKIP] Board not found or <6 corners in {img_path.name}")
                 continue
 
         # Get matching 3D object points from the board definition
