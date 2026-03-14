@@ -56,6 +56,13 @@ try:
 except ImportError:
     CAMERA_AVAILABLE = False
 
+# Optional safety guard — loads Perception/safe_limits.json
+try:
+    from safety_guard import SafetyGuard, SafetyViolation
+    _SAFETY_AVAILABLE = True
+except ImportError:
+    _SAFETY_AVAILABLE = False
+
 # ============================================================
 #  CONFIGURATION — edit these before running
 # ============================================================
@@ -142,6 +149,16 @@ class FailureDetectionPipeline:
         self._monitoring_active = False
         self._loop_stopped      = False
         self._slip_detected     = False
+
+        # ── Safety guard ────────────────────────────────────
+        self._guard = None
+        if _SAFETY_AVAILABLE:
+            _limits = os.path.join(os.path.dirname(__file__),
+                                   "..", "Perception", "safe_limits.json")
+            try:
+                self._guard = SafetyGuard(limits_path=_limits)
+            except FileNotFoundError:
+                print("[Safety] safe_limits.json not found — moves unchecked.")
 
         # ── Live camera state (shared between threads) ─────
         self._live_frame   = None          # latest decoded BGR frame (numpy)
@@ -436,6 +453,8 @@ class FailureDetectionPipeline:
     # ── Motion commands ───────────────────────────────────────
     def _movel(self, x, y, z, rx, ry, rz, vel=VEL, acc=ACC, wait_s=5.0):
         """Send a movel (linear) move and block for wait_s seconds."""
+        if hasattr(self, '_guard') and self._guard is not None:
+            self._guard.check(x, y, z)   # raises SafetyViolation if out of bounds
         script = (
             f"def move_prog():\n"
             f"  movel(p[{x},{y},{z},{rx},{ry},{rz}], a={acc}, v={vel})\n"
@@ -449,6 +468,8 @@ class FailureDetectionPipeline:
 
     def _movej(self, x, y, z, rx, ry, rz, vel=VEL, acc=ACC, wait_s=6.0):
         """Send a movej (joint space) move and block for wait_s seconds."""
+        if hasattr(self, '_guard') and self._guard is not None:
+            self._guard.check(x, y, z)   # raises SafetyViolation if out of bounds
         script = (
             f"def move_prog():\n"
             f"  movej(p[{x},{y},{z},{rx},{ry},{rz}], a={acc}, v={vel})\n"

@@ -32,6 +32,7 @@ import socket
 import struct
 import subprocess
 import sys
+import argparse
 import time
 from pathlib import Path
 
@@ -39,6 +40,16 @@ import cv2
 import cv2.aruco as aruco
 import depthai as dai
 import numpy as np
+
+# Safety guard — loads Perception/safe_limits.json
+import sys as _sys
+_sys.path.insert(0, str(Path(__file__).parent.parent.parent / "UR10"))
+try:
+    from safety_guard import SafetyGuard, SafetyViolation
+    _SAFETY_AVAILABLE = True
+except ImportError:
+    _SAFETY_AVAILABLE = False
+    print("[Safety] safety_guard.py not found — moves will NOT be checked.")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Configuration
@@ -183,6 +194,25 @@ def main():
         print("Aborted.")
         sys.exit(0)
 
+    # Parse --no-safety flag
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--no-safety", action="store_true",
+                        help="Skip workspace safety check (needed for calibration poses)")
+    args, _ = parser.parse_known_args()
+
+    # Load safety guard (skipped if --no-safety)
+    guard = None
+    if _SAFETY_AVAILABLE and not args.no_safety:
+        limits_path = Path(__file__).parent.parent.parent / "Perception" / "safe_limits.json"
+        try:
+            guard = SafetyGuard(limits_path=limits_path)
+            print("[Safety] SafetyGuard active — all poses will be checked before moving.")
+        except FileNotFoundError as e:
+            print(f"[Safety] {e}")
+            print("[Safety] Continuing WITHOUT safety limits.")
+    elif args.no_safety:
+        print("[Safety] --no-safety flag set — workspace limits BYPASSED for calibration.")
+
     # Allow Auto-Negotiation for USB Speed
     cfg = dai.Device.Config()
 
@@ -196,6 +226,15 @@ def main():
             target = s["tcp_pose"]
             print(f"\n[{idx+1}/{len(samples)}] Moving to saved pose #{s['id']:03d} …")
             print(f"         TCP target = ({target[0]*1000:+.1f}, {target[1]*1000:+.1f}, {target[2]*1000:+.1f}) mm")
+
+            # Safety check before moving
+            if guard is not None:
+                try:
+                    guard.check(*target[:3])
+                except SafetyViolation as e:
+                    print(f"\n  [Safety] Pose #{s['id']:03d} REJECTED — skipping.")
+                    print(f"  {e}")
+                    continue
 
             if not movel_pose(target):
                 print("  → URScript send failed, skipping.")
@@ -221,8 +260,8 @@ def main():
             # Detect Charuco
             charuco_corners, charuco_ids, marker_corners, marker_ids = charuco_detector.detectBoard(gray)
 
-            if charuco_corners is None or len(charuco_corners) < 4:
-                print("  → Board NOT detected — skipping this pose.")
+            if charuco_corners is None or len(charuco_corners) < 6:
+                print("  → Board NOT detected (or <6 corners) — skipping this pose.")
                 continue
 
             tcp_now = get_tcp_pose()

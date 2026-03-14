@@ -42,3 +42,8 @@ Thumbs.db
 # Inference outputs (generated — do not commit)
 Object Detection Pipeline/inference/test_images/
 Object Detection Pipeline/inference/inference_results/
+
+# Images & Videos
+CLIP_post_grab/clip_dataset/
+Perception/blog_pictures/
+Calibration/eye_in_hand/data/

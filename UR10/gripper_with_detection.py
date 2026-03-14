@@ -91,6 +91,26 @@ class UR10Controller:
         except Exception as e:
             print(f"Dashboard error: {e}")
             return None
+
+    def send_urscript(self, script: str):
+        """Send a URScript string to the robot (port 30002)."""
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(5.0)
+                s.connect((self.ip, self.secondary_port))
+                if not script.endswith("\n"):
+                    script += "\n"
+                s.sendall(script.encode("utf-8"))
+            return True
+        except Exception as e:
+            print(f"URScript error: {e}")
+            return False
+
+    def movel(self, pose, a=0.5, v=0.1):
+        """Move robot to a Cartesian pose using movel."""
+        x, y, z, rx, ry, rz = pose
+        script = f"movel(p[{x:.6f},{y:.6f},{z:.6f},{rx:.6f},{ry:.6f},{rz:.6f}], a={a:.3f}, v={v:.3f})\n"
+        return self.send_urscript(script)
     
     def load_program(self, program_name):
         """Load a .urp program."""
