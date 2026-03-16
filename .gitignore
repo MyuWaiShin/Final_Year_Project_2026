@@ -19,8 +19,10 @@ runs/
 models/*/weights/*.pt
 models/*/weights/*.onnx
 
-# Keep only best model ONNX (comment out if you want to track it)
+# Keep only best model ONNX and Train weights
 !models/yolov8n_100epochs/weights/best.onnx
+!Train/weights/*.pt
+!Train/weights/*.onnx
 
 # IDE
 .vscode/
