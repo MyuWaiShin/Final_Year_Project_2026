@@ -15,9 +15,9 @@ RESULT_FILE     = "calibration/T_cam2flange.npy"
 # ChArUco board config - we will generate this board next
 CHARUCO_SQUARES_X  = 7
 CHARUCO_SQUARES_Y  = 5
-CHARUCO_SQUARE_SIZE = 0.04   # 40mm per square - adjust after printing
-CHARUCO_MARKER_SIZE = 0.03   # 30mm marker - adjust after printing
-CHARUCO_DICT       = cv2.aruco.DICT_6X6_50  # same dict as your tag
+CHARUCO_SQUARE_SIZE = 0.038   # 40mm per square - adjust after printing
+CHARUCO_MARKER_SIZE = 0.028   # 30mm marker - adjust after printing
+CHARUCO_DICT       = cv2.aruco.DICT_6X6_250  # same dict as your tag
 
 # ── ARGUMENT PARSER ───────────────────────────────────────────────
 parser = argparse.ArgumentParser()
