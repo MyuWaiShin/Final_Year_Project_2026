@@ -1,5 +1,6 @@
 import depthai as dai
 import numpy as np
+import os
 
 print("Reading camera intrinsics from OAK-D Lite...")
 
@@ -16,6 +17,7 @@ with dai.Device() as device:
     print(K)
     
     # Save to file for use in other scripts
+    os.makedirs("calibration", exist_ok=True)
     np.save("calibration/camera_matrix.npy", K)
     print("\nSaved to calibration/camera_matrix.npy")
 

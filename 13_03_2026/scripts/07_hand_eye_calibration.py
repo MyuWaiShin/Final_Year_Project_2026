@@ -6,6 +6,7 @@ import rtde_control
 import json
 import argparse
 import time
+import os
 
 # ── CONFIG ────────────────────────────────────────────────────────
 ROBOT_IP        = "192.168.8.102"
