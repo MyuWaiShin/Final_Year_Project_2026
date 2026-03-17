@@ -1,3 +1,4 @@
+from pathlib import Path
 import depthai as dai
 import cv2
 import numpy as np
@@ -8,10 +9,14 @@ import argparse
 import time
 import os
 
+# ── Robust path setup ─────────────────────────────────────────────
+SCRIPT_DIR = Path(__file__).resolve().parent
+BASE_DIR   = SCRIPT_DIR.parent
+
 # ── CONFIG ────────────────────────────────────────────────────────
 ROBOT_IP        = "192.168.8.102"
-POSES_FILE      = "data/calibration_poses.json"
-RESULT_FILE     = "calibration/T_cam2flange.npy"
+POSES_FILE      = BASE_DIR / "data/calibration_poses.json"
+RESULT_FILE     = BASE_DIR / "calibration/T_cam2flange.npy"
 
 # ChArUco board config - we will generate this board next
 CHARUCO_SQUARES_X  = 7
@@ -45,7 +50,7 @@ charuco_params  = cv2.aruco.CharucoParameters()
 charuco_detector = cv2.aruco.CharucoDetector(board, charuco_params, detector_params)
 
 # ── CAMERA INTRINSICS ─────────────────────────────────────────────
-K    = np.load("calibration/camera_matrix.npy")
+K    = np.load(BASE_DIR / "calibration/camera_matrix.npy")
 dist = np.zeros((4, 1))
 
 # ── ROBOT CONNECTION ──────────────────────────────────────────────

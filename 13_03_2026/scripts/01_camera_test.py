@@ -1,31 +1,40 @@
-import depthai as dai
+import os
+from pathlib import Path
+
 import cv2
+import depthai as dai
+import numpy as np
 
-# Create a pipeline
+# ── Robust path setup ─────────────────────────────────────────────
+SCRIPT_DIR = Path(__file__).resolve().parent
+BASE_DIR   = SCRIPT_DIR.parent
+
+# ── Camera Pipeline (DepthAI API 2.0) ─────────────────────────────
 pipeline = dai.Pipeline()
+cam      = pipeline.create(dai.node.ColorCamera)
+cam.setBoardSocket(dai.CameraBoardSocket.CAM_A)
+cam.setResolution(dai.ColorCameraProperties.SensorResolution.THE_1080_P)
+cam.setInterleaved(False)
+cam.setColorOrder(dai.ColorCameraProperties.ColorOrder.BGR)
 
-# In depthai v3, Camera node replaces ColorCamera
-# .build() is required to initialise it
-cam = pipeline.create(dai.node.Camera).build()
+xout = pipeline.create(dai.node.XLinkOut)
+xout.setStreamName("video")
+cam.video.link(xout.input)
 
-# Request the output size we want
-videoOutput = cam.requestOutput((1280, 720), type=dai.ImgFrame.Type.BGR888p)
+device     = dai.Device(pipeline)
+videoQueue = device.getOutputQueue(name="video", maxSize=4, blocking=False)
 
-# Create output queue directly from the output
-videoQueue = videoOutput.createOutputQueue()
-
-# Start the pipeline
 print("Starting camera...")
-pipeline.start()
 print("Camera started! Press Q to quit.")
 
-while pipeline.isRunning():
-    frame = videoQueue.tryGet()
-    if frame is not None:
-        cv2.imshow("OAK-D Lite - Colour Camera", frame.getCvFrame())
+while True:
+    frame_pkt = videoQueue.tryGet()
+    if frame_pkt is not None:
+        cv2.imshow("OAK-D Lite - Colour Camera", frame_pkt.getCvFrame())
 
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 
+device.close()
 cv2.destroyAllWindows()
 print("Camera stopped.")
