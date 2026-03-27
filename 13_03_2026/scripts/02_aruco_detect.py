@@ -40,6 +40,7 @@ print("Starting camera...")
 print("Hold your ArUco tag in front of the camera")
 print("Press Q to quit\n")
 
+
 while True:
     frame_pkt = videoQueue.tryGet()
     if frame_pkt is not None:
@@ -63,7 +64,7 @@ while True:
         else:
             print("No tag detected...")
 
-        cv2.imshow("ArUco Detection", img)
+        cv2.imshow("ArUco Detection", cv2.resize(img, (960, 540)))
 
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break

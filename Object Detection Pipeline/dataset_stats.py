@@ -1,17 +1,18 @@
 """
-3_dataset_stats.py
-------------------
-Quick-check script — run at ANY point during data prep to see
-the current state of the V2 dataset.
+dataset_stats.py
+----------------
+Check the state of a YOLO-format dataset at any time.
 
-Reports:
-  • Number of raw videos per class
-  • Number of extracted images per class × split (train / val / test)
-  • Number of annotation labels per class × split (if annotation has started)
-  • Estimated split ratio
+Expected structure:
+    <dataset>/
+        train/  images/  labels/
+        val/    images/  labels/
+        test/   images/  labels/
+        data.yaml  (optional)
 
 Usage:
-    python 3_dataset_stats.py
+    python dataset_stats.py
+    (a folder picker opens if DATA_DIR is not set)
 """
 
 import sys
@@ -19,226 +20,189 @@ import io
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 from pathlib import Path
 
-# ============================================================
-# CONFIGURATION
-# ============================================================
+# ── Config ────────────────────────────────────────────────────────────────────
+DATA_DIR = Path(r"C:\Users\myuwa\OneDrive - Middlesex University\FYP Datasets\Dataset3 (combined)\dataset")
+# ─────────────────────────────────────────────────────────────────────────────
 
-# [PATH CONFIGURATION]
-# Set this to the absolute path of your data folder. 
-# This folder should contain the 'images' and 'labels' subfolders.
-DATA_DIR = Path(r"C:\Users\myuwa\OneDrive - Middlesex University\Major Project\Datasets\Data_Preparation_V3\data")
-
-RAW_VIDEO_DIR = DATA_DIR / "raw_videos"
-IMAGES_DIR    = DATA_DIR / "images"
-LABELS_DIR    = DATA_DIR / "labels"      # populated after annotation
-
-CLASSES = ["cubes", "cylinders"]
-SPLITS  = ["train", "val", "test"]
-
+SPLITS           = ["train", "val", "test"]
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp"}
-VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv"}
-LABEL_EXTENSION  = ".txt"
+# ─────────────────────────────────────────────────────────────────────────────
 
-# ============================================================
-# HELPERS
-# ============================================================
 
-def count_files(directory: Path, extensions: set) -> int:
-    if not directory.exists():
+def pick_folder():
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        root = tk.Tk()
+        root.withdraw()
+        picked = filedialog.askdirectory(
+            title="Select your 'dataset' folder (with train/ val/ test/ inside)"
+        )
+        root.destroy()
+        return Path(picked) if picked else None
+    except Exception as e:
+        print(f"  [ERROR] Folder picker failed: {e}")
+        return None
+
+
+def count_images(split_dir: Path) -> int:
+    d = split_dir / "images"
+    if not d.exists():
         return 0
-    return sum(1 for f in directory.iterdir()
-               if f.is_file() and f.suffix.lower() in extensions)
+    return sum(1 for f in d.iterdir()
+               if f.is_file() and f.suffix.lower() in IMAGE_EXTENSIONS)
 
 
-def bar(value: int, maximum: int, width: int = 20) -> str:
-    """Simple ASCII progress bar."""
-    if maximum == 0:
-        return " " * width
-    filled = int(round(value / maximum * width))
-    return "█" * filled + "░" * (width - filled)
+def count_labels(split_dir: Path):
+    """Returns (non_empty_label_files, total_box_count)."""
+    d = split_dir / "labels"
+    if not d.exists():
+        return 0, 0
+    non_empty = 0
+    total_boxes = 0
+    for f in d.iterdir():
+        if f.suffix != ".txt":
+            continue
+        lines = [l for l in f.read_text(encoding="utf-8", errors="replace")
+                              .splitlines() if l.strip()]
+        if lines:
+            non_empty += 1
+            total_boxes += len(lines)
+    return non_empty, total_boxes
 
 
-def pct(part: int, total: int) -> str:
+def count_classes(split_dir: Path) -> dict:
+    """Returns {class_id: box_count} across all label files in split."""
+    d = split_dir / "labels"
+    counts = {}
+    if not d.exists():
+        return counts
+    for f in d.iterdir():
+        if f.suffix != ".txt":
+            continue
+        for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
+            parts = line.strip().split()
+            if parts:
+                cid = int(parts[0])
+                counts[cid] = counts.get(cid, 0) + 1
+    return counts
+
+
+def parse_yaml_classes(data_dir: Path) -> list:
+    yaml_path = data_dir / "data.yaml"
+    if not yaml_path.exists():
+        return []
+    for line in yaml_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.strip().startswith("names:"):
+            raw = line.split(":", 1)[1].strip()
+            names = [n.strip(" []'\"") for n in raw.split(",")]
+            return [n for n in names if n]
+    return []
+
+
+def pct(part, total):
     if total == 0:
-        return "  —  "
+        return "   --"
     return f"{part / total * 100:5.1f}%"
 
 
-# ============================================================
-# SECTIONS
-# ============================================================
-
-def section_raw_videos():
-    print("=" * 62)
-    print("  [RAW VIDEOS]")
-    print("=" * 62)
-
-    grand_total = 0
-    for cls in CLASSES:
-        n = count_files(RAW_VIDEO_DIR / cls, VIDEO_EXTENSIONS)
-        grand_total += n
-        status = "[OK]" if n > 0 else "[!!]"
-        print(f"  {status}  {cls:<15}  {n:>3} video(s)")
-
-    print(f"\n  Total recordings : {grand_total}")
-    if not RAW_VIDEO_DIR.exists():
-        print(f"\n  [!!] Folder not found: {RAW_VIDEO_DIR}")
-        print("      --> Run 1_splice_videos.py first.")
-    print()
-
-
-def section_images():
-    print("=" * 62)
-    print("  [EXTRACTED IMAGES]  (train / val / test)")
-    print("=" * 62)
-
-    # Build table
-    table   = {}   # table[cls][split] = count
-    col_tot = {s: 0 for s in SPLITS}   # per-split grand totals
-    row_tot = {}                         # per-class totals
-    grand   = 0
-
-    for cls in CLASSES:
-        table[cls] = {}
-        row_tot[cls] = 0
-        for split in SPLITS:
-            n = count_files(IMAGES_DIR / split / cls, IMAGE_EXTENSIONS)
-            table[cls][split] = n
-            row_tot[cls]     += n
-            col_tot[split]   += n
-            grand            += n
-
-    # Header
-    col_w = 9
-    print(f"\n  {'Class':<15}", end="")
-    for s in SPLITS:
-        print(f"  {s.capitalize():>{col_w}}", end="")
-    print(f"  {'Total':>{col_w}}  {'Share':>6}")
-    print(f"  {'─'*15}", end="")
-    for _ in SPLITS:
-        print(f"  {'─'*col_w}", end="")
-    print(f"  {'─'*col_w}  {'─'*6}")
-
-    for cls in CLASSES:
-        print(f"  {cls:<15}", end="")
-        for split in SPLITS:
-            print(f"  {table[cls][split]:>{col_w},}", end="")
-        print(f"  {row_tot[cls]:>{col_w},}  {pct(row_tot[cls], grand)}")
-
-    print(f"  {'─'*15}", end="")
-    for _ in SPLITS:
-        print(f"  {'─'*col_w}", end="")
-    print(f"  {'─'*col_w}  {'─'*6}")
-
-    print(f"  {'TOTAL':<15}", end="")
-    for split in SPLITS:
-        print(f"  {col_tot[split]:>{col_w},}", end="")
-    print(f"  {grand:>{col_w},}  100.0%")
-
-    # Ratio row
-    print(f"\n  Split ratio →", end="")
-    for split in SPLITS:
-        print(f"  {split}:{pct(col_tot[split], grand)}", end="")
-    print()
-
-    # Missing-folder warnings
-    missing = []
-    for cls in CLASSES:
-        for split in SPLITS:
-            d = IMAGES_DIR / split / cls
-            if not d.exists():
-                missing.append(str(d))
-
-    if missing:
-        print(f"\n  [!!] Missing output directories (run 2_extract_frames.py):")
-        for m in missing[:6]:
-            print(f"       {m}")
-    elif grand == 0:
-        print("\n  [!!] No images found -- run 2_extract_frames.py.")
-    print()
-
-
-def section_labels():
-    print("=" * 62)
-    print("  [ANNOTATION LABELS]  (post auto-annotation)")
-    print("=" * 62)
-
-    grand = 0
-    any_labels = False
-
-    for split in SPLITS:
-        for cls in CLASSES:
-            lbl_dir = LABELS_DIR / split / cls
-            n = count_files(lbl_dir, {LABEL_EXTENSION})
-            img_dir = IMAGES_DIR / split / cls
-            n_img   = count_files(img_dir, IMAGE_EXTENSIONS)
-
-            if n > 0:
-                any_labels = True
-            grand += n
-
-            coverage = pct(n, n_img) if n_img else "  —  "
-            b        = bar(n, n_img)
-            print(f"  {split}/{cls:<14}  {n:>5} labels / {n_img:>5} images"
-                  f"  [{b}]  {coverage}")
-
-    if not any_labels:
-        print("\n  [!!] No labels yet -- annotation not started.")
-        print("      --> Run auto_annotation.py (coming soon).")
-    else:
-        print(f"\n  Total labels: {grand:,}")
-    print()
-
-
-def section_summary():
-    print("=" * 62)
-    print("  [READINESS SUMMARY]")
-    print("=" * 62)
-
-    # Videos
-    n_videos = sum(
-        count_files(RAW_VIDEO_DIR / cls, VIDEO_EXTENSIONS) for cls in CLASSES
-    )
-    # Images
-    n_images = sum(
-        count_files(IMAGES_DIR / split / cls, IMAGE_EXTENSIONS)
-        for split in SPLITS for cls in CLASSES
-    )
-    # Labels
-    n_labels = sum(
-        count_files(LABELS_DIR / split / cls, {LABEL_EXTENSION})
-        for split in SPLITS for cls in CLASSES
-    )
-
-    steps = [
-        ("1_splice_videos.py",   n_videos > 0, f"{n_videos} video(s) ready"),
-        ("2_extract_frames.py",  n_images > 0, f"{n_images:,} frames extracted"),
-        ("auto_annotation.py",   n_labels > 0, f"{n_labels:,} labels generated"),
-    ]
-
-    for script, done, detail in steps:
-        icon = "[x]" if done else "[ ]"
-        print(f"  {icon}  {script:<28}  {detail}")
-
-    print()
-
-# ============================================================
-# MAIN
-# ============================================================
-
 def main():
+    global DATA_DIR
+
+    if DATA_DIR is None or not Path(DATA_DIR).exists():
+        print("\n  Dataset folder not set -- opening folder picker...")
+        DATA_DIR = pick_folder()
+        if DATA_DIR is None:
+            print("  Cancelled. Exiting.")
+            sys.exit(0)
+
+    DATA_DIR = Path(DATA_DIR)
+    class_names = parse_yaml_classes(DATA_DIR)
+
     print()
     print("=" * 62)
-    print("  PDE3802 — MODEL V2 — DATASET STATISTICS")
-    print(f"  Data root: {DATA_DIR.absolute()}")
+    print("  DATASET STATISTICS  (YOLO format)")
+    print(f"  Folder: {DATA_DIR}")
     print("=" * 62)
+    if class_names:
+        print(f"  Classes ({len(class_names)}): {', '.join(class_names)}")
     print()
 
-    section_raw_videos()
-    section_images()
-    section_labels()
-    section_summary()
+    # ── Per-split summary ──────────────────────────────────────────────────────
+    col = 10
+    print(f"  {'Split':<8} {'Images':>{col}} {'Labelled':>{col}} "
+          f"{'Boxes':>{col}} {'Coverage':>{col}}  {'Avg bx/img':>10}")
+    print(f"  {'-'*8} {'-'*col} {'-'*col} {'-'*col} {'-'*col}  {'-'*10}")
 
+    grand_img = grand_lbl = grand_box = 0
+
+    for split in SPLITS:
+        n_img        = count_images(DATA_DIR / split)
+        n_lbl, n_box = count_labels(DATA_DIR / split)
+        avg          = f"{n_box / n_img:.2f}" if n_img else "  --"
+        flag         = " " if n_img else "!"
+        print(f"  {split:<8} {n_img:>{col},} {n_lbl:>{col},} "
+              f"{n_box:>{col},} {pct(n_lbl, n_img):>{col}}  {avg:>10}  [{flag}]")
+        grand_img += n_img
+        grand_lbl += n_lbl
+        grand_box += n_box
+
+    print(f"  {'-'*8} {'-'*col} {'-'*col} {'-'*col} {'-'*col}  {'-'*10}")
+    grand_avg = f"{grand_box / grand_img:.2f}" if grand_img else "  --"
+    print(f"  {'TOTAL':<8} {grand_img:>{col},} {grand_lbl:>{col},} "
+          f"{grand_box:>{col},} {pct(grand_lbl, grand_img):>{col}}  {grand_avg:>10}")
+
+    if grand_img > 0 and grand_lbl > grand_img:
+        print(f"\n  (* Coverage >100%: some images contain 2+ objects,")
+        print(f"     so box count > image count. Not an error.)")
+
+    # ── Per-class breakdown ────────────────────────────────────────────────────
+    print()
+    print(f"  CLASS BREAKDOWN (box count per split)")
+    print(f"  {'Class':<16}", end="")
+    for s in SPLITS:
+        print(f"  {s.capitalize():>{col}}", end="")
+    print(f"  {'Total':>{col}}")
+    print(f"  {'-'*16}", end="")
+    for _ in SPLITS:
+        print(f"  {'-'*col}", end="")
+    print(f"  {'-'*col}")
+
+    all_ids = set()
+    split_cls = {}
+    for split in SPLITS:
+        counts = count_classes(DATA_DIR / split)
+        split_cls[split] = counts
+        all_ids.update(counts.keys())
+
+    for cid in sorted(all_ids):
+        name = class_names[cid] if cid < len(class_names) else f"class_{cid}"
+        print(f"  {name:<16}", end="")
+        row_total = 0
+        for split in SPLITS:
+            n = split_cls[split].get(cid, 0)
+            row_total += n
+            print(f"  {n:>{col},}", end="")
+        print(f"  {row_total:>{col},}")
+
+    # ── Readiness ─────────────────────────────────────────────────────────────
+    print()
+    print("=" * 62)
+    print("  READINESS")
+    print("=" * 62)
+    yaml_ok = (DATA_DIR / "data.yaml").exists()
+    checks = [
+        (grand_img > 0,  f"{grand_img:,} images across all splits"),
+        (grand_lbl > 0,  f"{grand_lbl:,} labelled images  ({grand_box:,} boxes)"),
+        (yaml_ok,        "data.yaml found" if yaml_ok
+                         else "data.yaml NOT found  (run 3_auto_annotation.py)"),
+    ]
+    for ok, msg in checks:
+        print(f"  {'[x]' if ok else '[ ]'}  {msg}")
+    if grand_img > 0 and grand_lbl > 0 and yaml_ok:
+        print(f"\n  --> Ready for YOLO training!")
+        print(f"      yolo train model=yolov8n.pt data={DATA_DIR / 'data.yaml'}")
+    print()
     print("=" * 62)
     print()
 

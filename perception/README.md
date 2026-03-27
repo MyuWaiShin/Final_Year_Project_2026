@@ -108,7 +108,6 @@ Located in `models/` directory:
 **Classes detected:**
 - `cube` - Styrofoam cubes
 - `cylinder` - Styrofoam cylinders  
-- `arc` - Styrofoam arc shapes
 
 ### Why YOLOv8n (not YOLO26n)?
 

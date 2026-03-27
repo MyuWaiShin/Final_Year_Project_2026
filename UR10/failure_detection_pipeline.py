@@ -110,8 +110,8 @@ MAX_RETRIES         = 3
 GRIPPER_SETTLE_S    = 2.5
 
 # Movement speeds
-VEL                 = 0.3          # m/s
-ACC                 = 0.3          # m/s²
+VEL                 = 0.5          # m/s
+ACC                 = 0.2          # m/s²
 
 # OAK-D crop parameters (must match training crop in collect_clip_dataset.py)
 CROP_W              = 1400

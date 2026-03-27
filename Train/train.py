@@ -39,7 +39,7 @@ if sys.platform == 'win32':
 DATA_YAML   = r"c:\Users\MS3433\Final_Year_Project_2026\Train\data.yaml"
 PROJECT_DIR = "runs/train"
 IMG_SIZE    = 640
-BATCH       = 32        # RTX 5080 can handle a larger batch size
+BATCH       = 32        # RTX 5080 can handle a larger batch size.
 EPOCHS      = 100
 PATIENCE    = 20
 DEVICE      = 0         # 0 = GPU, 'cpu' = CPU only

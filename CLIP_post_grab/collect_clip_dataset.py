@@ -52,7 +52,7 @@ except ImportError:  # depthai is only needed when using the OAK-D
 
 try:
     # Uses the same UR10Controller you already use for gripper_with_detection.
-    from Perception.ur10_control.gripper_with_detection import UR10Controller
+    from UR10.gripper_with_detection import UR10Controller
 except Exception as e:  # pragma: no cover - import error only at runtime
     UR10Controller = None  # type: ignore[assignment]
     _IMPORT_ERROR = e

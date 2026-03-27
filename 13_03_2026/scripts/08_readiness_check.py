@@ -50,6 +50,7 @@ pipeline = dai.Pipeline()
 cam      = pipeline.create(dai.node.ColorCamera)
 cam.setBoardSocket(dai.CameraBoardSocket.CAM_A)
 cam.setResolution(dai.ColorCameraProperties.SensorResolution.THE_1080_P)
+cam.setVideoSize(1280, 720)
 cam.setInterleaved(False)
 cam.setColorOrder(dai.ColorCameraProperties.ColorOrder.BGR)
 xout = pipeline.create(dai.node.XLinkOut)
@@ -59,6 +60,7 @@ cam.video.link(xout.input)
 device     = dai.Device(pipeline)
 videoQueue = device.getOutputQueue(name="video", maxSize=4, blocking=False)
 print("Camera started!\n")
+
 
 print("=" * 50)
 print("CONTROLS:  SPACE = print TCP  |  Q = quit")
@@ -94,7 +96,7 @@ while True:
     cv2.putText(frame, "SPACE = print TCP | Q = quit", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
     cv2.putText(frame, f"TCP samples: {sample_count}", (20, 115), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2)
 
-    cv2.imshow("Readiness Check", frame)
+    cv2.imshow("Readiness Check", cv2.resize(frame, (960, 540)))
     key = cv2.waitKey(1) & 0xFF
 
     if key == ord('q'):
