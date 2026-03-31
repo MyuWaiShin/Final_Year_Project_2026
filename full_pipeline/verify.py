@@ -328,8 +328,35 @@ def run_clip(model, preprocess, clf, frame: np.ndarray, device: str) -> tuple:
     return p_holding, p_empty
 
 
+# ── Model loader (callable from main.py at startup) ──────────────────────────
+def load_models() -> dict:
+    """
+    Load YOLO + CLIP models and return them in a dict.
+    Call this once at pipeline startup (e.g. in a background thread) so that
+    verify() has zero loading latency when it runs.
+    """
+    if not YOLO_MODEL.exists():
+        raise FileNotFoundError(f"YOLO weights not found: {YOLO_MODEL}")
+    yolo = YOLO(str(YOLO_MODEL), task="classify")
+
+    if not CLIP_PROBE.exists():
+        raise FileNotFoundError(f"CLIP probe not found: {CLIP_PROBE}")
+    dev = "cuda" if torch.cuda.is_available() else "cpu"
+    clip_model, clip_pre = openai_clip.load("ViT-B/32", device=dev)
+    with open(CLIP_PROBE, "rb") as f:
+        clip_clf = pickle.load(f)
+
+    return {
+        "yolo":         yolo,
+        "clip_model":   clip_model,
+        "clip_pre":     clip_pre,
+        "clip_clf":     clip_clf,
+        "clip_device":  dev,
+    }
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
-def main() -> dict:
+def main(models: dict = None) -> dict:
     """
     Verify stage: lift, tilt wrist, classify with YOLO + CLIP.
 
@@ -372,36 +399,33 @@ def main() -> dict:
     print(f"  Lift target  : Z={lift_z:.4f}  (+{LIFT_HEIGHT_M*1000:.0f} mm)")
     print(f"  J3 current   : {joints[3]:.4f} rad  →  tilt to {joints[3]+WRIST1_TILT_RAD:.4f} rad\n")
 
-    # ── Start loading models in background (runs while robot moves) ──────────
-    _models   = {}           # filled by loader thread
-    _load_err = [None]       # captures any exception
-    _loaded   = threading.Event()
+    # ── Load models (or use pre-loaded ones passed in from main.py) ──────────
+    if models is not None:
+        print("  [bg] Using pre-loaded models.\n")
+        yolo_model      = models["yolo"]
+        clip_model      = models["clip_model"]
+        clip_preprocess = models["clip_pre"]
+        clip_clf        = models["clip_clf"]
+        clip_device     = models["clip_device"]
+    else:
+        # Fall back to background loading while the robot moves
+        _models   = {}
+        _load_err = [None]
+        _loaded   = threading.Event()
 
-    def _load_models():
-        try:
-            if not YOLO_MODEL.exists():
-                raise FileNotFoundError(f"YOLO weights not found: {YOLO_MODEL}")
-            _models["yolo"] = YOLO(str(YOLO_MODEL), task="classify")
-            print(f"  [bg] YOLO loaded ({YOLO_MODEL.parent.parent.name})")
+        def _load_models():
+            try:
+                _models.update(load_models())
+                print(f"  [bg] Models loaded.")
+            except Exception as e:
+                _load_err[0] = e
+            finally:
+                _loaded.set()
 
-            if not CLIP_PROBE.exists():
-                raise FileNotFoundError(f"CLIP probe not found: {CLIP_PROBE}")
-            dev = "cuda" if torch.cuda.is_available() else "cpu"
-            _models["clip_model"], _models["clip_pre"] = openai_clip.load("ViT-B/32", device=dev)
-            with open(CLIP_PROBE, "rb") as f:
-                _models["clip_clf"] = pickle.load(f)
-            _models["clip_device"] = dev
-            print(f"  [bg] CLIP loaded (device: {dev})")
-        except Exception as e:
-            _load_err[0] = e
-        finally:
-            _loaded.set()
+        threading.Thread(target=_load_models, daemon=True).start()
+        print("  [bg] Model loading started in background ...\n")
 
-    loader = threading.Thread(target=_load_models, daemon=True)
-    loader.start()
-    print("  [bg] Model loading started in background ...\n")
-
-    # ── 1. Lift straight up (models loading concurrently) ─────────────────────
+    # ── 1. Lift straight up ───────────────────────────────────────────────────
     print("  [1/3] Lifting ...")
     movel(sender, state, px, py, lift_z, prx, pry, prz)
     print(f"  At hover Z={lift_z:.4f}")
@@ -413,18 +437,19 @@ def main() -> dict:
     movej_joints(sender, state, tilt_joints)
     print("  Wrist tilted.")
 
-    # ── Wait for models (usually already done by now) ─────────────────────────
-    if not _loaded.is_set():
-        print("  Waiting for models to finish loading ...")
-    _loaded.wait(timeout=60.0)
-    if _load_err[0] is not None:
-        raise _load_err[0]
+    # ── Wait for models if we started a background loader ─────────────────────
+    if models is None:
+        if not _loaded.is_set():
+            print("  Waiting for models to finish loading ...")
+        _loaded.wait(timeout=60.0)
+        if _load_err[0] is not None:
+            raise _load_err[0]
+        yolo_model      = _models["yolo"]
+        clip_model      = _models["clip_model"]
+        clip_preprocess = _models["clip_pre"]
+        clip_clf        = _models["clip_clf"]
+        clip_device     = _models["clip_device"]
 
-    yolo_model      = _models["yolo"]
-    clip_model      = _models["clip_model"]
-    clip_preprocess = _models["clip_pre"]
-    clip_clf        = _models["clip_clf"]
-    clip_device     = _models["clip_device"]
     print("  Models ready.")
 
     # ── 3. Open camera and grab frame ─────────────────────────────────────────

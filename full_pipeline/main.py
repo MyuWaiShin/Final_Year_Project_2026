@@ -19,11 +19,12 @@ Usage
 """
 
 import argparse
+import threading
 
 from explore  import main as explore
 from navigate import main as navigate
 from grasp    import main as grasp
-from verify   import main as verify
+from verify   import main as verify, load_models
 from recover  import main as recover
 
 # from transit  import main as transit    # TODO
@@ -37,6 +38,21 @@ def run_pipeline(autonomous: bool = False):
     print("\n" + "=" * 60)
     print("  FULL PIPELINE START")
     print("=" * 60 + "\n")
+
+    # ── Pre-load CLIP + YOLO in background while explore/navigate run ────
+    _verify_models  = [None]
+    _model_err      = [None]
+
+    def _load():
+        try:
+            _verify_models[0] = load_models()
+            print("[INFO] Verify models pre-loaded.")
+        except Exception as e:
+            _model_err[0] = e
+            print(f"[WARN] Model pre-load failed: {e} — verify will load on demand.")
+
+    threading.Thread(target=_load, daemon=True).start()
+    print("[INFO] Pre-loading verify models in background …\n")
 
     # ── Stage 1: Explore (runs once) ────────────────────────────────────
     print("[STAGE 1] Explore – scanning for ArUco tag …")
@@ -90,7 +106,7 @@ def run_pipeline(autonomous: bool = False):
 
         # ── Stage 4: Verify ────────────────────────────────────────────
         print("[STAGE 4] Verify – lift, tilt wrist, YOLO + CLIP check …")
-        verify_result = verify()
+        verify_result = verify(models=_verify_models[0])
 
         if verify_result["result"] == "empty":
             verify_fails += 1
