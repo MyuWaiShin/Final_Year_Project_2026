@@ -81,6 +81,11 @@ APPROACH_ACCEL = 0.3   # rad/s²
 # ── Arrival tolerances ──────────────────────────────────────────────────
 JOINT_TOL_RAD = 0.01   # rad — all joints within this → arrived
 
+# ── Gripper ─────────────────────────────────────────────────────────────
+DASHBOARD_PORT   = 29999
+GRIP_OPEN_URP    = "/programs/myu/open_gripper.urp"
+GRIP_OPEN_MM     = 85.0   # expected open width
+
 
 # ── Robot state reader (port 30002 secondary client) ────────────────────
 class RobotStateReader(threading.Thread):
@@ -291,6 +296,33 @@ def tcp_to_matrix(tcp_pose):
     return T
 
 
+def _dashboard_cmd(robot_ip: str, cmd: str) -> str:
+    """Send a single dashboard command (port 29999) and return the response."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(5.0)
+        s.connect((robot_ip, DASHBOARD_PORT))
+        s.recv(1024)   # welcome message
+        s.sendall((cmd + "\n").encode())
+        return s.recv(1024).decode().strip()
+
+
+def open_gripper(robot_ip: str, state: RobotStateReader):
+    """Open the RG2 via dashboard URP. Skips if already open."""
+    if state.get_width_mm() >= GRIP_OPEN_MM - 5.0:
+        print("  Gripper already open.")
+        return
+    print("  Opening gripper …")
+    _dashboard_cmd(robot_ip, f"load {GRIP_OPEN_URP}")
+    time.sleep(0.06)
+    _dashboard_cmd(robot_ip, "play")
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        if state.get_width_mm() >= GRIP_OPEN_MM - 5.0:
+            break
+        time.sleep(0.1)
+    print(f"  Gripper open: {state.get_width_mm():.1f} mm")
+
+
 def detect_tag(frame, grey, K, dist_coeffs, T_cam2flange, state, detector):
     """
     Run one frame of ArUco detection.
@@ -370,7 +402,9 @@ def main():
     input()
     print("  Moving to scan pose …")
     movej_joints(sender, state, SCAN_JOINT_POS, APPROACH_SPEED, APPROACH_ACCEL)
-    print("  Scan pose reached.\n")
+    print("  Scan pose reached.")
+    open_gripper(ROBOT_IP, state)
+    print()
 
     # ── Build sweep waypoints (vary only J0 from scan pose) ─────────────
     sweep_start = list(SCAN_JOINT_POS); sweep_start[0] += SWEEP_START_RAD

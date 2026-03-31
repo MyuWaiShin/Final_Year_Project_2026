@@ -53,9 +53,6 @@ ARUCO_DICT_TYPE = aruco.DICT_6X6_250
 ARUCO_TAG_ID    = 13
 MARKER_SIZE     = 0.021   # metres – match your printed tag
 
-# ── Hover config ────────────────────────────────────────────────────────
-HOVER_Z_M = -0.050
-
 # TCP orientation (Rodrigues vector) — pointing straight down.
 HOVER_RX  = 2.225
 HOVER_RY  = 2.170
@@ -64,6 +61,7 @@ HOVER_RZ  = 0.022
 # Calibration offsets (empirically tuned to correct residual X/Y errors)
 CALIB_X_OFFSET_M = -0.005
 CALIB_Y_OFFSET_M = -0.050
+CALIB_Z_OFFSET_M = -0.186   # TCP descends 18.6 cm below detected tag surface
 
 # Move speed / acceleration
 MOVE_SPEED = 0.04   # m/s
@@ -347,6 +345,7 @@ def main():
                 tag_pos_base = T_tag2base[:3, 3].copy()
                 tag_pos_base[0] += CALIB_X_OFFSET_M
                 tag_pos_base[1] += CALIB_Y_OFFSET_M
+                tag_pos_base[2] += CALIB_Z_OFFSET_M
                 tag_detected = True
 
                 bx, by, bz = tag_pos_base
@@ -355,7 +354,7 @@ def main():
                             (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (180, 180, 255), 1)
                 cv2.putText(frame, f"Base: ({bx:.3f}, {by:.3f}, {bz:.3f}) m",
                             (10, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (255, 255, 0), 1)
-                cv2.putText(frame, f"Hover target: ({bx:.3f}, {by:.3f}, {HOVER_Z_M:.3f}) m  [Z fixed]",
+                cv2.putText(frame, f"Target: ({bx:.3f}, {by:.3f}, {bz:.3f}) m",
                             (10, 130), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (0, 255, 200), 1)
                 break
 
@@ -377,14 +376,13 @@ def main():
                 print("[WARN] Tag not detected – aim camera at tag first.")
                 continue
 
-            bx, by, _ = tag_pos_base
-            target_pose = [bx, by, HOVER_Z_M, HOVER_RX, HOVER_RY, HOVER_RZ]
+            bx, by, bz = tag_pos_base
+            target_pose = [bx, by, bz, HOVER_RX, HOVER_RY, HOVER_RZ]
             cur_tcp = state.get_tcp_pose()
             dist_mm = np.linalg.norm(np.array(target_pose[:3]) - np.array(cur_tcp[:3])) * 1000
 
             print("\n" + "=" * 60)
-            print(f"  Tag base frame:  X={bx:.4f}  Y={by:.4f}")
-            print(f"  Hover Z (fixed): {HOVER_Z_M:.4f} m")
+            print(f"  Tag base frame:  X={bx:.4f}  Y={by:.4f}  Z={bz:.4f}")
             print(f"  Target pose:     {[round(v, 4) for v in target_pose]}")
             print(f"  Distance:        {dist_mm:.1f} mm")
             print("=" * 60)
