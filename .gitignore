@@ -47,5 +47,10 @@ Object Detection Pipeline/inference/inference_results/
 
 # Images & Videos
 CLIP_post_grab/clip_dataset/
+CLIP_post_grab/clip_dataset.zip
 Perception/blog_pictures/
 Calibration/eye_in_hand/data/
+full_pipeline/temp/classification
+full_pipeline/temp/detection
+full_pipeline/temp/videos
+full_pipeline/temp/data_v1.zip

@@ -49,7 +49,7 @@ class OrientedBoxAnalyzer:
         h, s, v = cv2.split(hsv_crop)
 
         # Only look at pixels with enough colour — ignore grey/wood/black dots
-        sat_thresh = 80  # Increased from 60 to filter more background noise
+        sat_thresh = 70  # Increased from 60 to filter more background noise
         coloured   = s > sat_thresh
 
         if coloured.sum() < 50:          # basically a grey crop, fall back later
