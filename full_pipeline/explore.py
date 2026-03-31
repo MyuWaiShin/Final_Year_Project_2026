@@ -64,10 +64,18 @@ def load_scan_pose():
     return data["joint_angles"]
 
 # ── Sweep config ────────────────────────────────────────────────────────
-SWEEP_START_RAD = -0.5
-SWEEP_END_RAD   =  0.5
-SWEEP_SPEED     =  0.2   # rad/s
-SWEEP_ACCEL     =  0.1   # rad/s²
+SWEEP_START_RAD   = -0.5
+SWEEP_END_RAD     =  0.5
+SWEEP_SPEED       =  0.2   # rad/s
+SWEEP_ACCEL       =  0.1   # rad/s²  (ramp up)
+SWEEP_STOP_ACCEL  =  0.8   # rad/s²  (hard stop on tag detect — must be >> SWEEP_ACCEL)
+
+# ── Retry sweep config ───────────────────────────────────────────────────
+# On each retry: raise shoulder (J1) to get a higher vantage,
+# and reduce wrist1 (J3) by the same amount to keep camera pointing downward.
+SCAN_MAX_SWEEPS     = 2       # total sweep attempts before giving up
+SCAN_RETRY_DELTA_J1 = -0.15   # rad — shoulder up each retry (~8.6 deg)
+SCAN_RETRY_DELTA_J3 = -0.15   # rad — wrist1 compensates to maintain downward view
 
 # ── ArUco ───────────────────────────────────────────────────────────────
 ARUCO_DICT_TYPE = aruco.DICT_6X6_250
@@ -272,6 +280,10 @@ def movej_joints(sender: URScriptSender, state: RobotStateReader,
     if max(abs(c - t) for c, t in zip(cur, joint_angles)) < tol:
         return   # already there
 
+    # Check BEFORE sending — a movej sent after stopj overrides the stop.
+    if stop_check and stop_check():
+        return
+
     q_str = ",".join(f"{j:.6f}" for j in joint_angles)
     sender.send(f"movej([{q_str}],a={acc:.4f},v={vel:.4f})")
 
@@ -407,55 +419,83 @@ def main():
     print()
 
     # ── Build sweep waypoints (vary only J0 from scan pose) ─────────────
-    sweep_start = list(SCAN_JOINT_POS); sweep_start[0] += SWEEP_START_RAD
-    sweep_end   = list(SCAN_JOINT_POS); sweep_end[0]   += SWEEP_END_RAD
-
-    print(f"  Sweeping J0 from {sweep_start[0]:.3f} → {sweep_end[0]:.3f} rad …")
+    print(f"  Sweeping J0 from offset {SWEEP_START_RAD:.2f} → {SWEEP_END_RAD:.2f} rad …")
     print("  Press ENTER to start sweep (Q in camera window = abort) …")
     input()
 
-    # ── Start sweep asynchronously then poll camera ─────────────────────
+    current_scan_pose = list(SCAN_JOINT_POS)   # may be adjusted on retry
     tag_result = {"pos": None}
-    sweep_done = threading.Event()
 
-    def _sweep():
-        for waypoint in (sweep_end, sweep_start):
-            if tag_result["pos"] is not None:
+    for sweep_num in range(1, SCAN_MAX_SWEEPS + 1):
+        if sweep_num > 1:
+            # Raise J1 (shoulder) + reduce J3 (wrist1) to compensate view angle
+            current_scan_pose[1] += SCAN_RETRY_DELTA_J1
+            current_scan_pose[3] += SCAN_RETRY_DELTA_J3
+            print(f"\n  [Retry {sweep_num}/{SCAN_MAX_SWEEPS}] J1 → {current_scan_pose[1]:.3f}  "
+                  f"J3 → {current_scan_pose[3]:.3f}  (higher + compensated view) …")
+            movej_joints(sender, state, current_scan_pose,
+                         APPROACH_SPEED, APPROACH_ACCEL)
+            print("  New scan pose reached.")
+
+        sweep_start = list(current_scan_pose); sweep_start[0] += SWEEP_START_RAD
+        sweep_end   = list(current_scan_pose); sweep_end[0]   += SWEEP_END_RAD
+        print(f"  Sweep {sweep_num}: J0 {sweep_start[0]:.3f} → {sweep_end[0]:.3f} rad")
+
+        sweep_done = threading.Event()
+
+        def _sweep(s_start=sweep_start, s_end=sweep_end):
+            for waypoint in (s_end, s_start):
+                if tag_result["pos"] is not None:
+                    break
+                movej_joints(sender, state, waypoint, SWEEP_SPEED, SWEEP_ACCEL,
+                             stop_check=lambda: tag_result["pos"] is not None)
+                # Dwell at each endpoint: the camera needs a settled moment to
+                # see any tag that's in FOV — detection is unreliable while the
+                # arm is moving because the camera angle sweeps ahead of the arc.
+                end_t = time.time() + 0.6
+                while time.time() < end_t:
+                    if tag_result["pos"] is not None:
+                        break
+                    time.sleep(0.05)
+            sweep_done.set()
+
+        sweep_thread = threading.Thread(target=_sweep, daemon=True)
+        sweep_thread.start()
+
+        print("  Sweeping … (tag window open – Q to abort)\n")
+        while not sweep_done.is_set():
+            pkt   = videoQueue.get()
+            frame = pkt.getCvFrame()
+            grey  = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+            tag_pos, frame = detect_tag(
+                frame, grey, K, dist_coeffs, T_cam2flange, state, detector)
+
+            if tag_pos is not None and tag_result["pos"] is None:
+                tag_result["pos"] = tag_pos
+                px, py, pz = tag_pos
+                print(f"  ✓ Tag detected at base frame: X={px:.4f}  Y={py:.4f}  Z={pz:.4f}")
+                print("  Stopping sweep …")
+                stopj(sender, SWEEP_STOP_ACCEL)
+                cv2.putText(frame, "TAG FOUND — stopping", (10, 35),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+
+            label = "TAG FOUND" if tag_result["pos"] is not None else f"Sweep {sweep_num}/{SCAN_MAX_SWEEPS} — searching …"
+            color = (0, 255, 0) if tag_result["pos"] is not None else (0, 0, 255)
+            cv2.putText(frame, label, (10, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+            cv2.imshow("explore", cv2.resize(frame, (960, 540)))
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                stopj(sender, SWEEP_STOP_ACCEL)
+                sweep_done.set()
                 break
-            movej_joints(sender, state, waypoint, SWEEP_SPEED, SWEEP_ACCEL,
-                         stop_check=lambda: tag_result["pos"] is not None)
-        sweep_done.set()
 
-    sweep_thread = threading.Thread(target=_sweep, daemon=True)
-    sweep_thread.start()
+        sweep_thread.join(timeout=2.0)
 
-    print("  Sweeping … (tag window open – Q to abort)\n")
-    while not sweep_done.is_set():
-        pkt   = videoQueue.get()
-        frame = pkt.getCvFrame()
-        grey  = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        if tag_result["pos"] is not None:
+            break   # found — exit retry loop
+        if sweep_num < SCAN_MAX_SWEEPS:
+            print(f"  Tag not found on sweep {sweep_num}. Trying from higher position …")
 
-        tag_pos, frame = detect_tag(
-            frame, grey, K, dist_coeffs, T_cam2flange, state, detector)
-
-        if tag_pos is not None and tag_result["pos"] is None:
-            tag_result["pos"] = tag_pos
-            px, py, pz = tag_pos
-            print(f"  ✓ Tag detected at base frame: X={px:.4f}  Y={py:.4f}  Z={pz:.4f}")
-            print("  Stopping sweep …")
-            stopj(sender, SWEEP_ACCEL)
-            cv2.putText(frame, "TAG FOUND — stopping", (10, 35),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
-
-        label = "TAG FOUND" if tag_result["pos"] is not None else "Searching for tag …"
-        color = (0, 255, 0) if tag_result["pos"] is not None else (0, 0, 255)
-        cv2.putText(frame, label, (10, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
-        cv2.imshow("explore", cv2.resize(frame, (960, 540)))
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            stopj(sender, SWEEP_ACCEL)
-            break
-
-    sweep_thread.join(timeout=2.0)
     cv2.destroyAllWindows()
 
     # ── Result ──────────────────────────────────────────────────────────
@@ -466,7 +506,7 @@ def main():
         print(f"  Tag base frame: X={px:.4f}  Y={py:.4f}  Z={pz:.4f}")
         print("=" * 55)
     else:
-        print("\n  Tag NOT found during sweep.")
+        print(f"\n  Tag NOT found after {SCAN_MAX_SWEEPS} sweeps.")
 
     # Cleanup
     state.stop()

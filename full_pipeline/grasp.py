@@ -107,6 +107,7 @@ class RobotStateReader(threading.Thread):
         self._joints    = [0.0] * 6
         self._voltage   = 0.0
         self._di_word   = 0      # 64-bit digital input word
+        self._protective_stop = False
 
     def run(self):
         while not self._stop_evt.is_set():
@@ -147,8 +148,13 @@ class RobotStateReader(threading.Thread):
                 break
             pt = data[off + 4]
 
+            # Type 0: Robot Mode Data — isProtectiveStopped at off+17
+            if pt == 0 and ps >= 18:
+                with self._lock:
+                    self._protective_stop = bool(data[off + 17])
+
             # Type 1: Joint Data — q_actual at off+5, each joint 41 bytes
-            if pt == 1 and ps >= 251:
+            elif pt == 1 and ps >= 251:
                 joints = []
                 for j in range(6):
                     base = off + 5 + j * 41
@@ -205,6 +211,11 @@ class RobotStateReader(threading.Thread):
         slope  = (91.0 - 10.5) / (65.8 - 8.5)
         offset = 10.5 - (8.5 * slope)
         return max(0.0, round((raw_mm * slope) + offset, 1))
+
+    def is_protective_stop(self) -> bool:
+        """True when the robot has entered a protective stop."""
+        with self._lock:
+            return self._protective_stop
 
     def is_force_detected(self) -> bool:
         """True when RG2 TDI1 (bit 17 of masterboard DI word) is HIGH."""
@@ -279,6 +290,12 @@ def movel(sender: URScriptSender, state: RobotStateReader,
         if ((cur[0]-x)**2 + (cur[1]-y)**2 + (cur[2]-z)**2) ** 0.5 < tol:
             return
         time.sleep(0.01)
+    # Timeout — check if due to protective stop
+    if state.is_protective_stop():
+        raise RuntimeError(
+            "[PROTECTIVE STOP] Robot stopped during movel — "
+            "clear the stop on the pendant before continuing."
+        )
     print("  [movel] Warning: timeout before arrival tolerance reached.")
 
 
@@ -391,13 +408,19 @@ def close_gripper_once(robot_ip: str, state: RobotStateReader, last_urp: list):
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
-def main() -> dict:
+def main(descend_m: float = None, close_only: bool = False) -> dict:
     """
-    Grasp stage: descend, close, check width + force.
+    Grasp stage: descend (optional), close, check width + force.
 
-    The robot must already be at the hover position (navigate.py leaves it
-    there). Grasp reads the current TCP pose from the robot — no pose
-    argument needed.
+    Parameters
+    ----------
+    descend_m : float, optional
+        How far to descend below hover Z (metres). Defaults to DESCEND_OFFSET
+        (150 mm). Ignored when close_only=True.
+    close_only : bool, optional
+        When True (recovery mode) skip the descent entirely — navigate has
+        already re-positioned the TCP above the tag, so we just close and check.
+        On a miss we still open the gripper but do NOT rise (already at hover Z).
 
     Returns
     -------
@@ -406,6 +429,7 @@ def main() -> dict:
         "missed"   — gripper fully closed; nothing grabbed
     """
     signal.signal(signal.SIGINT, lambda *_: os._exit(1))
+    descent = descend_m if descend_m is not None else DESCEND_OFFSET
 
     # ── Connect first so we can read the current TCP pose ───────────────────
     print("Connecting to robot ...")
@@ -422,13 +446,16 @@ def main() -> dict:
     # ── Read hover pose from robot (navigate already left it here) ──────────
     hover_pose = state.get_tcp_pose()
     hx, hy, hz, hrx, hry, hrz = hover_pose
-    pick_z = hz - DESCEND_OFFSET
+    pick_z = hz - descent
 
     print("\n" + "=" * 58)
     print("  STAGE 3 — GRASP (Layer 1: width + force check)")
     print("=" * 58)
     print(f"  Hover pose  : X={hx:.4f}  Y={hy:.4f}  Z={hz:.4f}")
-    print(f"  Descend to  : Z={pick_z:.4f}  ({DESCEND_OFFSET*1000:.0f} mm below hover)")
+    if close_only:
+        print(f"  Mode        : CLOSE-ONLY (recovery — no descent)")
+    else:
+        print(f"  Descend to  : Z={pick_z:.4f}  ({descent*1000:.0f} mm below hover)")
     print(f"  Width miss   threshold: {WIDTH_CLOSED_MM} mm")
     print("=" * 58 + "\n")
 
@@ -439,13 +466,17 @@ def main() -> dict:
     print(f"  Current TCP: X={cur[0]:.4f}  Y={cur[1]:.4f}  Z={cur[2]:.4f}")
     print(f"  Gripper width: {state.get_width_mm():.1f} mm")
     print()
-    input("  Press ENTER to descend and close gripper (hand on E-stop): ")
+    if close_only:
+        input("  Press ENTER to close gripper (recovery — hand on E-stop): ")
+    else:
+        input("  Press ENTER to descend and close gripper (hand on E-stop): ")
 
-    # ── Descend ─────────────────────────────────────────────────────────────
-    print(f"\n  Descending {DESCEND_OFFSET*1000:.0f} mm to pick Z={pick_z:.4f} ...")
-    movel(sender, state, hx, hy, pick_z, hrx, hry, hrz,
-          vel=DESCEND_SPEED, acc=DESCEND_ACCEL)
-    print("  At pick Z.")
+    # ── Descend (skipped in close_only / recovery mode) ──────────────────────
+    if not close_only:
+        print(f"\n  Descending {descent*1000:.0f} mm to pick Z={pick_z:.4f} ...")
+        movel(sender, state, hx, hy, pick_z, hrx, hry, hrz,
+              vel=DESCEND_SPEED, acc=DESCEND_ACCEL)
+        print("  At pick Z.")
 
     # ── Close gripper ────────────────────────────────────────────────────────
     close_gripper_once(ROBOT_IP, state, last_urp)
@@ -456,11 +487,12 @@ def main() -> dict:
 
     if width < WIDTH_CLOSED_MM:
         print(f"  X  Gripper fully closed ({width:.1f} mm) — object MISSED.")
-        # Open and rise back to hover height
         open_gripper(ROBOT_IP, state, last_urp)
-        print(f"  Rising back to hover Z={hz:.4f} ...")
-        movel(sender, state, hx, hy, hz, hrx, hry, hrz)
-        print("  Back at hover height.\n")
+        if not close_only:
+            # Only rise if we descended — in close_only mode we're already at hover Z
+            print(f"  Rising back to hover Z={hz:.4f} ...")
+            movel(sender, state, hx, hy, hz, hrx, hry, hrz)
+            print("  Back at hover height.\n")
         state.stop()
         sender.close()
         return {"result": "missed"}

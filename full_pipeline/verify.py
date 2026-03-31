@@ -101,6 +101,7 @@ class RobotStateReader(threading.Thread):
         self._ready_evt = threading.Event()
         self._tcp_pose  = [0.0] * 6
         self._joints    = [0.0] * 6
+        self._protective_stop = False
 
     def run(self):
         while not self._stop_evt.is_set():
@@ -140,7 +141,11 @@ class RobotStateReader(threading.Thread):
             if ps < 5 or off + ps > len(data):
                 break
             pt = data[off + 4]
-            if pt == 1 and ps >= 251:
+            # Type 0: Robot Mode Data — isProtectiveStopped at off+17
+            if pt == 0 and ps >= 18:
+                with self._lock:
+                    self._protective_stop = bool(data[off + 17])
+            elif pt == 1 and ps >= 251:
                 joints = []
                 for j in range(6):
                     base = off + 5 + j * 41
@@ -167,6 +172,11 @@ class RobotStateReader(threading.Thread):
     def get_joint_positions(self) -> list:
         with self._lock:
             return list(self._joints)
+
+    def is_protective_stop(self) -> bool:
+        """True when the robot has entered a protective stop."""
+        with self._lock:
+            return self._protective_stop
 
     def stop(self):
         self._stop_evt.set()
@@ -226,6 +236,11 @@ def movel(sender, state, x, y, z, rx, ry, rz,
         if ((cur[0]-x)**2 + (cur[1]-y)**2 + (cur[2]-z)**2) ** 0.5 < tol:
             return
         time.sleep(0.01)
+    if state.is_protective_stop():
+        raise RuntimeError(
+            "[PROTECTIVE STOP] Robot stopped during movel — "
+            "clear the stop on the pendant before continuing."
+        )
     print("  [movel] Warning: timeout before arrival tolerance reached.")
 
 
@@ -242,6 +257,11 @@ def movej_joints(sender, state, joints,
         if max(abs(c - t) for c, t in zip(cur, joints)) < tol:
             return
         time.sleep(0.01)
+    if state.is_protective_stop():
+        raise RuntimeError(
+            "[PROTECTIVE STOP] Robot stopped during movej — "
+            "clear the stop on the pendant before continuing."
+        )
     print("  [movej] Warning: timeout before arrival tolerance reached.")
 
 
