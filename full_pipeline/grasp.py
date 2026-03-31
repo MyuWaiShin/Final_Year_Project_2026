@@ -69,7 +69,8 @@ GRIP_CLOSE_MM       = 0.0      # expected closed width (used in skip check)
 WIDTH_CLOSED_MM = 11.0    # <= this  → gripper fully snapped shut → missed
 
 # ── Motion parameters ────────────────────────────────────────────────────────
-DESCEND_OFFSET = 0.150    # metres — descend this far below hover Z to pick
+DESCEND_OFFSET          = 0.150   # metres — full descent below hover Z (first attempt)
+RECOVERY_DESCEND_OFFSET = 0.010   # metres — short descent used in recovery mode
 MOVE_SPEED     = 0.04     # m/s  — normal moves (lift back up on miss)
 MOVE_ACCEL     = 0.01     # m/s²
 DESCEND_SPEED  = 0.02     # m/s  — slow descend onto object
@@ -417,11 +418,11 @@ def main(descend_m: float = None, close_only: bool = False,
     ----------
     descend_m : float, optional
         How far to descend below hover Z (metres). Defaults to DESCEND_OFFSET
-        (150 mm). Ignored when close_only=True.
+        (150 mm) on first attempt, or RECOVERY_DESCEND_OFFSET (10 mm) when
+        close_only=True.
     close_only : bool, optional
-        When True (recovery mode) skip the descent entirely — navigate has
-        already re-positioned the TCP above the tag, so we just close and check.
-        On a miss we still open the gripper but do NOT rise (already at hover Z).
+        When True (recovery mode) use a shorter 10 mm descent instead of the
+        full 150 mm — navigate has already re-positioned the TCP above the tag.
 
     Returns
     -------
@@ -430,7 +431,12 @@ def main(descend_m: float = None, close_only: bool = False,
         "missed"   — gripper fully closed; nothing grabbed
     """
     signal.signal(signal.SIGINT, lambda *_: os._exit(1))
-    descent = descend_m if descend_m is not None else DESCEND_OFFSET
+    if descend_m is not None:
+        descent = descend_m
+    elif close_only:
+        descent = RECOVERY_DESCEND_OFFSET
+    else:
+        descent = DESCEND_OFFSET
 
     # ── Connect first so we can read the current TCP pose ───────────────────
     print("Connecting to robot ...")
@@ -453,10 +459,9 @@ def main(descend_m: float = None, close_only: bool = False,
     print("  STAGE 3 — GRASP (Layer 1: width + force check)")
     print("=" * 58)
     print(f"  Hover pose  : X={hx:.4f}  Y={hy:.4f}  Z={hz:.4f}")
-    if close_only:
-        print(f"  Mode        : CLOSE-ONLY (recovery — no descent)")
-    else:
-        print(f"  Descend to  : Z={pick_z:.4f}  ({descent*1000:.0f} mm below hover)")
+    mode_str = f"RECOVERY ({descent*1000:.0f} mm descent)" if close_only else "NORMAL"
+    print(f"  Mode        : {mode_str}")
+    print(f"  Descend to  : Z={pick_z:.4f}  ({descent*1000:.0f} mm below hover)")
     print(f"  Width miss   threshold: {WIDTH_CLOSED_MM} mm")
     print("=" * 58 + "\n")
 
@@ -468,17 +473,13 @@ def main(descend_m: float = None, close_only: bool = False,
     print(f"  Gripper width: {state.get_width_mm():.1f} mm")
     print()
     if not autonomous:
-        if close_only:
-            input("  Press ENTER to close gripper (recovery — hand on E-stop): ")
-        else:
-            input("  Press ENTER to descend and close gripper (hand on E-stop): ")
+        input("  Press ENTER to descend and close gripper (hand on E-stop): ")
 
-    # ── Descend (skipped in close_only / recovery mode) ──────────────────────
-    if not close_only:
-        print(f"\n  Descending {descent*1000:.0f} mm to pick Z={pick_z:.4f} ...")
-        movel(sender, state, hx, hy, pick_z, hrx, hry, hrz,
-              vel=DESCEND_SPEED, acc=DESCEND_ACCEL)
-        print("  At pick Z.")
+    # ── Descend ──────────────────────────────────────────────────────────────
+    print(f"\n  Descending {descent*1000:.0f} mm to pick Z={pick_z:.4f} ...")
+    movel(sender, state, hx, hy, pick_z, hrx, hry, hrz,
+          vel=DESCEND_SPEED, acc=DESCEND_ACCEL)
+    print("  At pick Z.")
 
     # ── Close gripper ────────────────────────────────────────────────────────
     close_gripper_once(ROBOT_IP, state, last_urp)
@@ -490,11 +491,9 @@ def main(descend_m: float = None, close_only: bool = False,
     if width < WIDTH_CLOSED_MM:
         print(f"  X  Gripper fully closed ({width:.1f} mm) — object MISSED.")
         open_gripper(ROBOT_IP, state, last_urp)
-        if not close_only:
-            # Only rise if we descended — in close_only mode we're already at hover Z
-            print(f"  Rising back to hover Z={hz:.4f} ...")
-            movel(sender, state, hx, hy, hz, hrx, hry, hrz)
-            print("  Back at hover height.\n")
+        print(f"  Rising back to hover Z={hz:.4f} ...")
+        movel(sender, state, hx, hy, hz, hrx, hry, hrz)
+        print("  Back at hover height.\n")
         state.stop()
         sender.close()
         return {"result": "missed"}

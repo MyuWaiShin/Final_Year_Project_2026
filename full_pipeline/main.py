@@ -29,7 +29,8 @@ from recover  import main as recover
 # from transit  import main as transit    # TODO
 # from release  import main as release    # TODO
 
-MAX_RETRIES = 3     # max attempts for the navigate → grasp → verify loop
+MAX_GRASP_RETRIES  = 3   # max grasp failures before aborting
+MAX_VERIFY_RETRIES = 3   # max verify failures before aborting
 
 
 def run_pipeline(autonomous: bool = False):
@@ -46,41 +47,42 @@ def run_pipeline(autonomous: bool = False):
     print(f"[STAGE 1] Complete – tag at {[round(v, 4) for v in tag_pos[:3]]}\n")
 
     # ── Retry loop: Navigate → Grasp → Verify ───────────────────────────
-    hover_pos = None
-    for attempt in range(1, MAX_RETRIES + 1):
+    hover_pos     = None
+    grasp_fails   = 0
+    verify_fails  = 0
+
+    while True:
+        is_recovery = (grasp_fails + verify_fails) > 0
+        attempt     = grasp_fails + verify_fails + 1
         print(f"{'─'*60}")
-        print(f"  ATTEMPT {attempt} / {MAX_RETRIES}")
+        print(f"  ATTEMPT {attempt}  "
+              f"(grasp failures: {grasp_fails}/{MAX_GRASP_RETRIES}  "
+              f"verify failures: {verify_fails}/{MAX_VERIFY_RETRIES})")
         print(f"{'─'*60}\n")
 
         # ── Stage 2: Navigate ──────────────────────────────────────────
         print("[STAGE 2] Navigate – hovering above tag …")
         hover_pos = navigate(autonomous=autonomous)
         if hover_pos is None:
-            print("[FAIL] Navigation cancelled or failed.")
-            if attempt < MAX_RETRIES:
-                print(f"  No hover position — cannot recover. Aborting.\n")
-                break
-            else:
-                print("[ABORT] All attempts exhausted.")
-                return
-
+            print("[ABORT] Navigation cancelled or failed. Halting.")
+            return
         print(f"[STAGE 2] Complete – hover at {[round(v, 4) for v in hover_pos[:3]]}\n")
 
         # ── Stage 3: Grasp ─────────────────────────────────────────────
         print("[STAGE 3] Grasp – close, check width + force …")
-        # First attempt: descend 150 mm onto object.
-        # Recovery attempts: navigate already re-positioned the TCP — just close.
-        grasp_result = grasp(close_only=(attempt > 1), autonomous=autonomous)
+        # First-ever attempt: descend onto the object.
+        # Recovery attempts: navigate already repositioned TCP — just close.
+        grasp_result = grasp(close_only=is_recovery, autonomous=autonomous)
 
         if grasp_result["result"] == "missed":
-            print(f"[FAIL] Grasp missed on attempt {attempt}.")
-            if attempt < MAX_RETRIES:
-                print(f"  Recovering — rising to clearance height …\n")
-                recover(hover_pos)
-                continue   # ← back to top of loop, re-run navigate
-            else:
-                print("[ABORT] All retries exhausted after grasp failures.")
+            grasp_fails += 1
+            print(f"[FAIL] Grasp missed ({grasp_fails}/{MAX_GRASP_RETRIES}).")
+            if grasp_fails >= MAX_GRASP_RETRIES:
+                print("[ABORT] Max grasp retries reached. Pipeline halted.")
                 return
+            print("  Recovering — rising to clearance height …\n")
+            recover(hover_pos)
+            continue
 
         print(f"[STAGE 3] Complete – holding  "
               f"width={grasp_result['width_mm']:.1f} mm  "
@@ -91,17 +93,17 @@ def run_pipeline(autonomous: bool = False):
         verify_result = verify()
 
         if verify_result["result"] == "empty":
-            print(f"[FAIL] Verify failed on attempt {attempt}  "
-                  f"(score={verify_result['score']:.3f}  "
+            verify_fails += 1
+            print(f"[FAIL] Verify failed ({verify_fails}/{MAX_VERIFY_RETRIES})  "
+                  f"score={verify_result['score']:.3f}  "
                   f"YOLO={verify_result['yolo_conf']:.2f}  "
-                  f"CLIP={verify_result['clip_conf']:.2f}).")
-            if attempt < MAX_RETRIES:
-                print(f"  Recovering — opening gripper, rising to clearance height …\n")
-                recover(hover_pos)
-                continue   # ← back to top of loop, re-run navigate
-            else:
-                print("[ABORT] All retries exhausted after verify failures.")
+                  f"CLIP={verify_result['clip_conf']:.2f}.")
+            if verify_fails >= MAX_VERIFY_RETRIES:
+                print("[ABORT] Max verify retries reached. Pipeline halted.")
                 return
+            print("  Recovering — opening gripper, rising to clearance height …\n")
+            recover(hover_pos)
+            continue
 
         # ── Success ────────────────────────────────────────────────────
         print(f"[STAGE 4] Complete – holding confirmed  "
@@ -109,11 +111,6 @@ def run_pipeline(autonomous: bool = False):
               f"YOLO={verify_result['yolo_conf']:.2f}  "
               f"CLIP={verify_result['clip_conf']:.2f}\n")
         break   # EXIT RETRY LOOP — grasp confirmed
-
-    else:
-        # Loop ran to completion without breaking → all attempts failed
-        print("[ABORT] All retries exhausted. Pipeline failed.")
-        return
 
     # ── TODO: Stage 5+ ──────────────────────────────────────────────────
     print("[INFO] Further stages (transit, release) not yet implemented.")

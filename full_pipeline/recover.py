@@ -61,6 +61,11 @@ XYZ_TOL_M   = 0.005
 # ── ArUco ─────────────────────────────────────────────────────────────────────
 ARUCO_DICT_TYPE = aruco.DICT_6X6_250
 ARUCO_TAG_ID    = 13
+MARKER_SIZE     = 0.021   # metres
+
+# ── Centering ─────────────────────────────────────────────────────────────────
+CENTER_TOL_PX    = 80     # pixels — tag within this of frame centre = well centred
+FRAME_W, FRAME_H = 1280, 720
 
 
 # ── Robot state reader ────────────────────────────────────────────────────────
@@ -228,16 +233,59 @@ def _open_camera():
     queue  = device.getOutputQueue(name="video", maxSize=1, blocking=False)
     return device, queue
 
-def _tag_visible(frame):
-    """Return True if ARUCO_TAG_ID is visible in frame."""
+def _detect_tag(frame, K, dist_coeffs, T_cam2flange, state, detector):
+    """
+    Run ArUco detection on frame.
+    Returns (tag_base_pos, pixel_center, annotated_frame) or (None, None, frame).
+    pixel_center is (px, py) — the tag's centre in image coordinates.
+    """
     grey = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    detector = aruco.ArucoDetector(
-        aruco.getPredefinedDictionary(ARUCO_DICT_TYPE),
-        aruco.DetectorParameters()
-    )
     corners, ids, _ = detector.detectMarkers(grey)
-    if ids is None: return False
-    return int(ARUCO_TAG_ID) in ids.flatten().tolist()
+    if ids is None:
+        return None, None, frame
+    aruco.drawDetectedMarkers(frame, corners, ids)
+    for i, mid in enumerate(ids.flatten()):
+        if mid != ARUCO_TAG_ID:
+            continue
+        c = corners[i][0]
+        px_cx = float(c[:, 0].mean())
+        px_cy = float(c[:, 1].mean())
+        rvecs, tvecs, _ = aruco.estimatePoseSingleMarkers(
+            corners[i:i+1], MARKER_SIZE, K, dist_coeffs
+        )
+        rvec, tvec = rvecs[0][0], tvecs[0][0]
+        R_tag, _ = cv2.Rodrigues(rvec)
+        T_tag2cam = np.eye(4)
+        T_tag2cam[:3, :3] = R_tag
+        T_tag2cam[:3, 3]  = tvec
+        tcp = state.get_tcp_pose()
+        R_tcp, _ = cv2.Rodrigues(np.array(tcp[3:]))
+        T_tcp2base = np.eye(4)
+        T_tcp2base[:3, :3] = R_tcp
+        T_tcp2base[:3, 3]  = tcp[:3]
+        T_tag2base = T_tcp2base @ T_cam2flange @ T_tag2cam
+        return T_tag2base[:3, 3].copy(), (px_cx, px_cy), frame
+    return None, None, frame
+
+
+def _compute_centering_xy(tag_base_pos, recovery_z, hrx, hry, hrz, T_cam2flange):
+    """
+    Compute EEF XY at recovery_z such that the camera optical axis passes
+    directly through tag_base_pos. Returns (x, y) or None on failure.
+    """
+    tx, ty, tz = tag_base_pos
+    try:
+        R_eef, _   = cv2.Rodrigues(np.array([hrx, hry, hrz], dtype=np.float64))
+        p_cam      = R_eef @ T_cam2flange[:3, 3]
+        z_cam_base = R_eef @ T_cam2flange[:3, 2]
+        if abs(z_cam_base[2]) < 1e-3:
+            return None
+        t  = (tz - (recovery_z + p_cam[2])) / z_cam_base[2]
+        cx = tx - p_cam[0] - t * z_cam_base[0]
+        cy = ty - p_cam[1] - t * z_cam_base[1]
+        return cx, cy
+    except Exception:
+        return None
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -278,31 +326,38 @@ def main(last_hover_pose: list) -> bool:
     print(f"  [Recover] At Z={state.get_tcp_pose()[2]:.4f}")
 
     # 4. Open camera + search circle
-    # ── Camera-offset compensation ─────────────────────────────────────────
-    # The camera is not co-axial with the tool. At recovery_z (+40 cm above
-    # hover) the angled camera is looking at a completely different table spot
-    # than (hx, hy). We compute the EEF XY position that makes the camera's
-    # optical axis actually point at (hx, hy, hz) from recovery_z, then centre
-    # the search circle there.
-    circle_cx, circle_cy = hx, hy   # fallback if calibration file is missing
+    # ── Load calibration ──────────────────────────────────────────────────────
+    dist_coeffs  = np.zeros((4, 1))
+    T_cam2flange = None
+    K            = None
     try:
+        K            = np.load(CALIB_DIR / "camera_matrix.npy")
         T_cam2flange = np.load(CALIB_DIR / "T_cam2flange.npy")
-        R_eef, _     = cv2.Rodrigues(np.array([hrx, hry, hrz], dtype=np.float64))
-        # Camera origin and optical-axis direction in base frame
-        p_cam_local  = R_eef @ T_cam2flange[:3, 3]   # camera XYZ offset in base
-        z_cam_base   = R_eef @ T_cam2flange[:3, 2]   # camera Z-axis in base
-        if abs(z_cam_base[2]) > 1e-3:                 # guard: camera not horizontal
-            cam_z_base   = p_cam_local[2] + recovery_z
-            t0           = (hz - cam_z_base) / z_cam_base[2]
-            circle_cx    = hx - p_cam_local[0] - t0 * z_cam_base[0]
-            circle_cy    = hy - p_cam_local[1] - t0 * z_cam_base[1]
+    except FileNotFoundError as e:
+        print(f"  [Recover] Warning: calibration file missing ({e.name}) — "
+              f"centering disabled, using raw hover XY for circle.")
+
+    detector = aruco.ArucoDetector(
+        aruco.getPredefinedDictionary(ARUCO_DICT_TYPE),
+        aruco.DetectorParameters()
+    )
+
+    # ── Camera-offset compensation for circle centre ───────────────────────────
+    circle_cx, circle_cy = hx, hy   # fallback
+    if T_cam2flange is not None:
+        R_eef, _   = cv2.Rodrigues(np.array([hrx, hry, hrz], dtype=np.float64))
+        p_cam_local = R_eef @ T_cam2flange[:3, 3]
+        z_cam_base  = R_eef @ T_cam2flange[:3, 2]
+        if abs(z_cam_base[2]) > 1e-3:
+            cam_z_base = p_cam_local[2] + recovery_z
+            t0         = (hz - cam_z_base) / z_cam_base[2]
+            circle_cx  = hx - p_cam_local[0] - t0 * z_cam_base[0]
+            circle_cy  = hy - p_cam_local[1] - t0 * z_cam_base[1]
             print(f"  [Recover] Camera-compensated circle centre: "
                   f"X={circle_cx:.4f}  Y={circle_cy:.4f}  "
                   f"(raw hover: X={hx:.4f}  Y={hy:.4f})")
         else:
             print("  [Recover] Warning: camera Z nearly horizontal — using raw hover XY.")
-    except FileNotFoundError:
-        print("  [Recover] Warning: T_cam2flange.npy not found — using raw hover XY.")
 
     print(f"  [Recover] Opening camera + starting {SEARCH_RADIUS_M*1000:.0f} mm search circle ...")
     cam_device, queue = _open_camera()
@@ -317,7 +372,7 @@ def main(last_hover_pose: list) -> bool:
         (circle_cx,     circle_cy,     recovery_z),   # return to centre
     ]
 
-    tag_found  = {"flag": False}
+    tag_found  = {"flag": False, "pos": None}
     move_done  = threading.Event()
 
     def _circle():
@@ -333,12 +388,31 @@ def main(last_hover_pose: list) -> bool:
     while not move_done.is_set():
         pkt   = queue.get()
         frame = pkt.getCvFrame()
-        if _tag_visible(frame) and not tag_found["flag"]:
-            tag_found["flag"] = True
-            _stopj(sender)
-            print("  [Recover] ✓ Tag spotted — stopping circle.")
-        label = "TAG FOUND" if tag_found["flag"] else "Searching ..."
-        col   = (0, 220, 0) if tag_found["flag"] else (0, 80, 220)
+
+        if K is not None and not tag_found["flag"]:
+            tag_pos, pix_center, frame = _detect_tag(
+                frame, K, dist_coeffs, T_cam2flange, state, detector)
+            if tag_pos is not None:
+                tag_found["flag"] = True
+                tag_found["pos"]  = tag_pos
+                _stopj(sender)
+                print("  [Recover] ✓ Tag spotted — stopping circle.")
+
+        if tag_found["flag"] and tag_found["pos"] is not None:
+            # re-detect for live pixel offset display (best-effort)
+            _, pix_center, frame = _detect_tag(
+                frame, K, dist_coeffs, T_cam2flange, state, detector)
+            if pix_center is not None:
+                dx = pix_center[0] - FRAME_W / 2
+                dy = pix_center[1] - FRAME_H / 2
+                dist_px = (dx**2 + dy**2) ** 0.5
+                col   = (0, 220, 0) if dist_px < CENTER_TOL_PX else (0, 200, 220)
+                label = f"TAG — {dist_px:.0f}px off centre"
+            else:
+                col, label = (0, 220, 0), "TAG FOUND"
+        else:
+            col, label = (0, 80, 220), "Searching ..."
+
         cv2.putText(frame, label, (10, 38), cv2.FONT_HERSHEY_SIMPLEX, 1.0, col, 2)
         cv2.imshow("recover — search circle", cv2.resize(frame, (640, 360)))
         if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -346,6 +420,18 @@ def main(last_hover_pose: list) -> bool:
             break
 
     circle_thread.join(timeout=2.0)
+
+    # ── Centering move ────────────────────────────────────────────────────────
+    if tag_found["pos"] is not None and T_cam2flange is not None:
+        print("  [Recover] Centering camera on tag ...")
+        cxy = _compute_centering_xy(
+            tag_found["pos"], recovery_z, hrx, hry, hrz, T_cam2flange)
+        if cxy is not None:
+            _movel(sender, state, cxy[0], cxy[1], recovery_z, hrx, hry, hrz)
+            print(f"  [Recover] Centred at EEF X={cxy[0]:.4f}  Y={cxy[1]:.4f}")
+        else:
+            print("  [Recover] Warning: centering computation failed — staying put.")
+
     cv2.destroyAllWindows()
     cam_device.close()
 

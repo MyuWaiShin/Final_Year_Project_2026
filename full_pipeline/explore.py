@@ -71,11 +71,16 @@ SWEEP_ACCEL       =  0.1   # rad/s²  (ramp up)
 SWEEP_STOP_ACCEL  =  0.8   # rad/s²  (hard stop on tag detect — must be >> SWEEP_ACCEL)
 
 # ── Retry sweep config ───────────────────────────────────────────────────
-# On each retry: raise shoulder (J1) to get a higher vantage,
-# and reduce wrist1 (J3) by the same amount to keep camera pointing downward.
-SCAN_MAX_SWEEPS     = 2       # total sweep attempts before giving up
-SCAN_RETRY_DELTA_J1 = -0.15   # rad — shoulder up each retry (~8.6 deg)
-SCAN_RETRY_DELTA_J3 = -0.15   # rad — wrist1 compensates to maintain downward view
+# On retry: descend RETRY_LOWER_M with camera-offset-compensated XY so the
+# camera still covers the same table area but from closer range.
+SCAN_MAX_SWEEPS  = 2       # total sweep attempts before giving up
+RETRY_LOWER_M    = 0.10    # metres to descend on retry (~10 cm)
+SCAN_TABLE_Z_M   = -0.05   # approximate table-top Z in robot base frame (tune if needed)
+
+# Cartesian move speeds for retry descent
+RETRY_SPEED_MS  = 0.05    # m/s
+RETRY_ACCEL_MS  = 0.02    # m/s²
+CARTESIAN_TOL_M = 0.005   # m — arrival tolerance for movel
 
 # ── ArUco ───────────────────────────────────────────────────────────────
 ARUCO_DICT_TYPE = aruco.DICT_6X6_250
@@ -365,6 +370,61 @@ def detect_tag(frame, grey, K, dist_coeffs, T_cam2flange, state, detector):
     return None, frame
 
 
+# ── Retry helpers ────────────────────────────────────────────────────────
+def _compute_lower_tcp(scan_tcp, T_cam2flange, lower_m, table_z):
+    """
+    Return a new TCP pose [x,y,z,rx,ry,rz] that is `lower_m` below scan_tcp,
+    with XY shifted so the camera optical axis still intersects the same table
+    spot it was covering from scan_tcp height.
+    Returns None if the geometry is degenerate (camera nearly horizontal).
+    """
+    hx, hy, hz   = scan_tcp[:3]
+    hrx, hry, hrz = scan_tcp[3:]
+    new_z = hz - lower_m
+    try:
+        R_eef, _   = cv2.Rodrigues(np.array([hrx, hry, hrz], dtype=np.float64))
+        p_cam      = R_eef @ T_cam2flange[:3, 3]   # camera offset in base frame
+        z_cam_base = R_eef @ T_cam2flange[:3, 2]   # camera optical-axis direction in base
+
+        if abs(z_cam_base[2]) < 1e-3:
+            return None   # camera nearly horizontal — ray won't hit table plane
+
+        # Where the camera ray hits the table from the original height
+        cam_z_orig = hz + p_cam[2]
+        t1         = (table_z - cam_z_orig) / z_cam_base[2]
+        look_x     = hx + p_cam[0] + t1 * z_cam_base[0]
+        look_y     = hy + p_cam[1] + t1 * z_cam_base[1]
+
+        # EEF XY at new_z such that camera still looks at (look_x, look_y)
+        cam_z_new  = new_z + p_cam[2]
+        t2         = (table_z - cam_z_new) / z_cam_base[2]
+        new_x      = look_x - p_cam[0] - t2 * z_cam_base[0]
+        new_y      = look_y - p_cam[1] - t2 * z_cam_base[1]
+        return [new_x, new_y, new_z, hrx, hry, hrz]
+    except Exception:
+        return None
+
+
+def movel_pose(sender: URScriptSender, state: RobotStateReader,
+               x, y, z, rx, ry, rz, vel: float, acc: float,
+               timeout: float = 30.0):
+    """Send movel to a Cartesian pose and wait for TCP arrival."""
+    cur = state.get_tcp_pose()
+    if ((cur[0]-x)**2 + (cur[1]-y)**2 + (cur[2]-z)**2) ** 0.5 < CARTESIAN_TOL_M:
+        return
+    sender.send(
+        f"movel(p[{x:.6f},{y:.6f},{z:.6f},{rx:.6f},{ry:.6f},{rz:.6f}],"
+        f"a={acc:.4f},v={vel:.4f})"
+    )
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        cur = state.get_tcp_pose()
+        if ((cur[0]-x)**2 + (cur[1]-y)**2 + (cur[2]-z)**2) ** 0.5 < CARTESIAN_TOL_M:
+            return
+        time.sleep(0.01)
+    print("  [Explore] Warning: movel timeout — continuing anyway.")
+
+
 # ── Main ────────────────────────────────────────────────────────────────
 def main(autonomous: bool = False):
     signal.signal(signal.SIGINT, lambda *_: os._exit(1))
@@ -430,14 +490,22 @@ def main(autonomous: bool = False):
 
     for sweep_num in range(1, SCAN_MAX_SWEEPS + 1):
         if sweep_num > 1:
-            # Raise J1 (shoulder) + reduce J3 (wrist1) to compensate view angle
-            current_scan_pose[1] += SCAN_RETRY_DELTA_J1
-            current_scan_pose[3] += SCAN_RETRY_DELTA_J3
-            print(f"\n  [Retry {sweep_num}/{SCAN_MAX_SWEEPS}] J1 → {current_scan_pose[1]:.3f}  "
-                  f"J3 → {current_scan_pose[3]:.3f}  (higher + compensated view) …")
-            movej_joints(sender, state, current_scan_pose,
-                         APPROACH_SPEED, APPROACH_ACCEL)
-            print("  New scan pose reached.")
+            # Descend for a closer view with camera-offset-compensated EEF XY
+            scan_tcp  = state.get_tcp_pose()
+            lower_tcp = _compute_lower_tcp(scan_tcp, T_cam2flange, RETRY_LOWER_M, SCAN_TABLE_Z_M)
+            if lower_tcp is None:
+                # Fallback: drop Z straight down, no XY shift
+                lower_tcp = [scan_tcp[0], scan_tcp[1], scan_tcp[2] - RETRY_LOWER_M,
+                             scan_tcp[3], scan_tcp[4], scan_tcp[5]]
+                print(f"\n  [Retry {sweep_num}/{SCAN_MAX_SWEEPS}] Camera compensation failed — "
+                      f"descending {RETRY_LOWER_M*100:.0f} cm straight down …")
+            else:
+                print(f"\n  [Retry {sweep_num}/{SCAN_MAX_SWEEPS}] Descending "
+                      f"{RETRY_LOWER_M*100:.0f} cm, camera-compensated EEF: "
+                      f"X={lower_tcp[0]:.4f}  Y={lower_tcp[1]:.4f}  Z={lower_tcp[2]:.4f} …")
+            movel_pose(sender, state, *lower_tcp, RETRY_SPEED_MS, RETRY_ACCEL_MS)
+            current_scan_pose = state.get_joint_positions()
+            print("  Lower scan pose reached.")
 
         sweep_start = list(current_scan_pose); sweep_start[0] += SWEEP_START_RAD
         sweep_end   = list(current_scan_pose); sweep_end[0]   += SWEEP_END_RAD
@@ -496,7 +564,7 @@ def main(autonomous: bool = False):
         if tag_result["pos"] is not None:
             break   # found — exit retry loop
         if sweep_num < SCAN_MAX_SWEEPS:
-            print(f"  Tag not found on sweep {sweep_num}. Trying from higher position …")
+            print(f"  Tag not found on sweep {sweep_num}. Descending for a closer view …")
 
     cv2.destroyAllWindows()
 
