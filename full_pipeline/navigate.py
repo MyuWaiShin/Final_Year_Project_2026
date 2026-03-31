@@ -54,9 +54,15 @@ ARUCO_TAG_ID    = 13
 MARKER_SIZE     = 0.021   # metres – match your printed tag
 
 # TCP orientation (Rodrigues vector) — pointing straight down.
+# Used as the baseline for orientation computation and as fallback if
+# tag orientation cannot be computed.
 HOVER_RX  = 2.225
 HOVER_RY  = 2.170
 HOVER_RZ  = 0.022
+
+# Autonomous mode: how many consecutive stable frames before auto-moving.
+STABLE_FRAMES_NEEDED = 8      # ~0.25 s at 30 fps
+STABLE_TOL_M         = 0.005  # 5 mm — max position jitter to count as stable
 
 # Calibration offsets (empirically tuned to correct residual X/Y errors)
 CALIB_X_OFFSET_M = -0.005
@@ -252,15 +258,68 @@ def movel(sender: URScriptSender, state: RobotStateReader,
         time.sleep(0.01)
 
 
-# ── Helper ──────────────────────────────────────────────────────────────
+# ── Helpers ─────────────────────────────────────────────────────────────
 def tcp_to_matrix(tcp_pose):
     R, _ = cv2.Rodrigues(np.array(tcp_pose[3:]))
     T = np.eye(4); T[:3, :3] = R; T[:3, 3] = tcp_pose[:3]
     return T
 
 
+def compute_hover_orientation(R_tag_base: np.ndarray,
+                               R_hover_baseline: np.ndarray) -> tuple:
+    """
+    Derive EEF orientation aligned to the ArUco tag's X-axis (yaw).
+
+    Strategy
+    --------
+    1. Extract the tag's yaw: angle its X-axis makes with base-frame X in XY plane.
+    2. Extract the baseline yaw from R_hover_baseline (the known good pointing-down
+       orientation for this robot).
+    3. Compute delta = tag_yaw - baseline_yaw and the ±180° flip candidate
+       (RG2 gripper is symmetric so both grasps are equivalent).
+    4. Pick the candidate with the smaller absolute delta (J6 safeguard — avoids
+       large wrist rotations).
+    5. Apply that rotation around the base Z-axis to R_hover_baseline and convert
+       back to axis-angle.
+
+    Returns
+    -------
+    (rx, ry, rz) — Rodrigues vector for use in movel(p[x,y,z,rx,ry,rz]).
+    Falls back to (HOVER_RX, HOVER_RY, HOVER_RZ) on any error.
+    """
+    try:
+        def _wrap(a):
+            return (a + np.pi) % (2 * np.pi) - np.pi
+
+        # Tag yaw: direction of tag X-axis projected onto base XY
+        x_tag    = R_tag_base[:, 0]
+        yaw_tag  = np.arctan2(x_tag[1], x_tag[0])
+
+        # Baseline yaw (same projection for current hover orientation)
+        yaw_base = np.arctan2(R_hover_baseline[1, 0], R_hover_baseline[0, 0])
+
+        delta_a  = _wrap(yaw_tag - yaw_base)
+        delta_b  = _wrap(delta_a + np.pi)          # 180° flip
+
+        chosen   = delta_a if abs(delta_a) <= abs(delta_b) else delta_b
+
+        if abs(chosen) > np.pi / 2:
+            print(f"  [Orient] Best delta = {np.degrees(chosen):.1f}° "
+                  f"(> 90° — large wrist rotation, proceeding with best option)")
+
+        c, s   = np.cos(chosen), np.sin(chosen)
+        R_z    = np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]], dtype=np.float64)
+        R_tgt  = R_z @ R_hover_baseline
+        rvec, _ = cv2.Rodrigues(R_tgt)
+        return tuple(float(v) for v in rvec.flatten())
+
+    except Exception as e:
+        print(f"  [Orient] Warning: orientation computation failed ({e}) — using baseline.")
+        return (HOVER_RX, HOVER_RY, HOVER_RZ)
+
+
 # ── Main ────────────────────────────────────────────────────────────────
-def main():
+def main(autonomous: bool = False):
     signal.signal(signal.SIGINT, lambda *_: os._exit(1))
 
     # Load calibration
@@ -270,6 +329,11 @@ def main():
     T_cam2flange = np.load(CALIB_DIR / "T_cam2flange.npy")
     print("  camera_matrix.npy  ✓")
     print("  T_cam2flange.npy   ✓\n")
+
+    # Baseline rotation matrix for orientation computation
+    R_hover_baseline, _ = cv2.Rodrigues(
+        np.array([HOVER_RX, HOVER_RY, HOVER_RZ], dtype=np.float64)
+    )
 
     # ArUco detector
     dictionary = aruco.getPredefinedDictionary(ARUCO_DICT_TYPE)
@@ -300,12 +364,19 @@ def main():
     videoQueue = device.getOutputQueue(name="video", maxSize=4, blocking=False)
     print("Camera started!\n")
     print("=" * 55)
-    print("  SPACE  →  hover TCP directly above the tag")
+    if autonomous:
+        print(f"  AUTO  →  moves when tag stable for {STABLE_FRAMES_NEEDED} frames")
+    else:
+        print("  SPACE  →  hover TCP directly above the tag")
     print("  Q      →  quit")
     print("=" * 55 + "\n")
 
-    tag_pos_base = None
-    tag_detected = False
+    tag_pos_base  = None
+    tag_orient    = (HOVER_RX, HOVER_RY, HOVER_RZ)   # updated each detected frame
+    tag_detected  = False
+    stable_count  = 0
+    last_stable_pos = None
+    target_pose   = None
 
     while True:
         frame     = videoQueue.get().getCvFrame()
@@ -346,6 +417,9 @@ def main():
                 tag_pos_base[0] += CALIB_X_OFFSET_M
                 tag_pos_base[1] += CALIB_Y_OFFSET_M
                 tag_pos_base[2] += CALIB_Z_OFFSET_M
+
+                # Smart wrist orientation aligned to tag X-axis
+                tag_orient  = compute_hover_orientation(T_tag2base[:3, :3], R_hover_baseline)
                 tag_detected = True
 
                 bx, by, bz = tag_pos_base
@@ -358,12 +432,37 @@ def main():
                             (10, 130), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (0, 255, 200), 1)
                 break
 
-        label = f"TAG {ARUCO_TAG_ID} DETECTED — press SPACE to hover" if tag_detected \
-                else f"Searching for tag ID {ARUCO_TAG_ID} …"
-        color = (0, 255, 0) if tag_detected else (0, 0, 255)
+        # ── Stability tracking (autonomous only) ────────────────────────
+        if autonomous:
+            if tag_detected:
+                if (last_stable_pos is not None and
+                        np.linalg.norm(tag_pos_base - last_stable_pos) < STABLE_TOL_M):
+                    stable_count += 1
+                else:
+                    stable_count = 1
+                last_stable_pos = tag_pos_base.copy()
+            else:
+                stable_count   = 0
+                last_stable_pos = None
+
+        # ── Overlay ─────────────────────────────────────────────────────
+        if autonomous:
+            if tag_detected:
+                label = f"TAG {ARUCO_TAG_ID} — stable {stable_count}/{STABLE_FRAMES_NEEDED}"
+                color = (0, 200, 255)
+            else:
+                label = f"Searching for tag ID {ARUCO_TAG_ID} …"
+                color = (0, 0, 255)
+            hint = "AUTO mode — Q to abort"
+        else:
+            label = (f"TAG {ARUCO_TAG_ID} DETECTED — press SPACE to hover"
+                     if tag_detected else f"Searching for tag ID {ARUCO_TAG_ID} …")
+            color = (0, 255, 0) if tag_detected else (0, 0, 255)
+            hint  = "SPACE = hover above tag  |  Q = quit"
+
         cv2.putText(frame, label, (10, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.75, color, 2)
-        cv2.putText(frame, "SPACE = hover above tag  |  Q = quit",
-                    (10, frame.shape[0] - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (200, 200, 200), 1)
+        cv2.putText(frame, hint, (10, frame.shape[0] - 15),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.52, (200, 200, 200), 1)
 
         cv2.imshow("navigate", cv2.resize(frame, (960, 540)))
         key = cv2.waitKey(1) & 0xFF
@@ -371,20 +470,40 @@ def main():
         if key == ord('q'):
             break
 
-        elif key == ord(' '):
+        # ── Autonomous: auto-execute when stable ─────────────────────────
+        if autonomous and stable_count >= STABLE_FRAMES_NEEDED and tag_pos_base is not None:
+            rx, ry, rz  = tag_orient
+            target_pose = [*tag_pos_base, rx, ry, rz]
+            dist_mm     = np.linalg.norm(
+                np.array(target_pose[:3]) - np.array(state.get_tcp_pose()[:3])) * 1000
+            print("\n" + "=" * 60)
+            print(f"  [AUTO] Tag stable — executing hover")
+            print(f"  Base: X={tag_pos_base[0]:.4f}  Y={tag_pos_base[1]:.4f}  Z={tag_pos_base[2]:.4f}")
+            print(f"  Orient: rx={rx:.4f}  ry={ry:.4f}  rz={rz:.4f}")
+            print(f"  Distance: {dist_mm:.1f} mm")
+            print("=" * 60)
+            print("  Moving …")
+            movel(sender, state, *target_pose, vel=MOVE_SPEED, acc=MOVE_ACCEL)
+            print("  Hover reached.")
+            break
+
+        # ── Debug: SPACE + YES ───────────────────────────────────────────
+        elif not autonomous and key == ord(' '):
             if not tag_detected or tag_pos_base is None:
                 print("[WARN] Tag not detected – aim camera at tag first.")
                 continue
 
-            bx, by, bz = tag_pos_base
-            target_pose = [bx, by, bz, HOVER_RX, HOVER_RY, HOVER_RZ]
-            cur_tcp = state.get_tcp_pose()
-            dist_mm = np.linalg.norm(np.array(target_pose[:3]) - np.array(cur_tcp[:3])) * 1000
+            rx, ry, rz  = tag_orient
+            target_pose = [*tag_pos_base, rx, ry, rz]
+            cur_tcp     = state.get_tcp_pose()
+            dist_mm     = np.linalg.norm(
+                np.array(target_pose[:3]) - np.array(cur_tcp[:3])) * 1000
 
             print("\n" + "=" * 60)
-            print(f"  Tag base frame:  X={bx:.4f}  Y={by:.4f}  Z={bz:.4f}")
-            print(f"  Target pose:     {[round(v, 4) for v in target_pose]}")
-            print(f"  Distance:        {dist_mm:.1f} mm")
+            print(f"  Base: X={tag_pos_base[0]:.4f}  Y={tag_pos_base[1]:.4f}  Z={tag_pos_base[2]:.4f}")
+            print(f"  Orient: rx={rx:.4f}  ry={ry:.4f}  rz={rz:.4f}")
+            print(f"  Target: {[round(v, 4) for v in target_pose]}")
+            print(f"  Distance: {dist_mm:.1f} mm")
             print("=" * 60)
             confirm = input("  Type YES to move (hand on E-stop): ").strip()
             if confirm.upper() != "YES":

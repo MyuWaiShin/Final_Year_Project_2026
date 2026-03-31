@@ -51,7 +51,7 @@ GRIP_OPEN_MM  = 85.0
 
 # ── Recovery params ───────────────────────────────────────────────────────────
 RECOVERY_HEIGHT_M = 0.40   # metres above hover Z to retreat to
-SEARCH_RADIUS_M   = 0.025  # metres — XY circle radius (~25 mm)
+SEARCH_RADIUS_M   = 0.060  # metres — XY circle radius (~60 mm)
 
 # ── Motion ────────────────────────────────────────────────────────────────────
 MOVE_SPEED  = 0.06   # m/s

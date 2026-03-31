@@ -366,7 +366,7 @@ def detect_tag(frame, grey, K, dist_coeffs, T_cam2flange, state, detector):
 
 
 # ── Main ────────────────────────────────────────────────────────────────
-def main():
+def main(autonomous: bool = False):
     signal.signal(signal.SIGINT, lambda *_: os._exit(1))
 
     # Load calibration
@@ -410,8 +410,9 @@ def main():
     print("=" * 55)
     SCAN_JOINT_POS = load_scan_pose()
     print(f"  Scan pose loaded: {[round(j, 3) for j in SCAN_JOINT_POS]}")
-    print("  Press ENTER to move to scan pose (hand on E-stop) …")
-    input()
+    if not autonomous:
+        print("  Press ENTER to move to scan pose (hand on E-stop) …")
+        input()
     print("  Moving to scan pose …")
     movej_joints(sender, state, SCAN_JOINT_POS, APPROACH_SPEED, APPROACH_ACCEL)
     print("  Scan pose reached.")
@@ -420,8 +421,9 @@ def main():
 
     # ── Build sweep waypoints (vary only J0 from scan pose) ─────────────
     print(f"  Sweeping J0 from offset {SWEEP_START_RAD:.2f} → {SWEEP_END_RAD:.2f} rad …")
-    print("  Press ENTER to start sweep (Q in camera window = abort) …")
-    input()
+    if not autonomous:
+        print("  Press ENTER to start sweep (Q in camera window = abort) …")
+        input()
 
     current_scan_pose = list(SCAN_JOINT_POS)   # may be adjusted on retry
     tag_result = {"pos": None}

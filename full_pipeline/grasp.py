@@ -408,7 +408,8 @@ def close_gripper_once(robot_ip: str, state: RobotStateReader, last_urp: list):
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
-def main(descend_m: float = None, close_only: bool = False) -> dict:
+def main(descend_m: float = None, close_only: bool = False,
+         autonomous: bool = False) -> dict:
     """
     Grasp stage: descend (optional), close, check width + force.
 
@@ -466,10 +467,11 @@ def main(descend_m: float = None, close_only: bool = False) -> dict:
     print(f"  Current TCP: X={cur[0]:.4f}  Y={cur[1]:.4f}  Z={cur[2]:.4f}")
     print(f"  Gripper width: {state.get_width_mm():.1f} mm")
     print()
-    if close_only:
-        input("  Press ENTER to close gripper (recovery — hand on E-stop): ")
-    else:
-        input("  Press ENTER to descend and close gripper (hand on E-stop): ")
+    if not autonomous:
+        if close_only:
+            input("  Press ENTER to close gripper (recovery — hand on E-stop): ")
+        else:
+            input("  Press ENTER to descend and close gripper (hand on E-stop): ")
 
     # ── Descend (skipped in close_only / recovery mode) ──────────────────────
     if not close_only:

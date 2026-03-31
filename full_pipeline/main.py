@@ -18,6 +18,8 @@ Usage
     python main.py
 """
 
+import argparse
+
 from explore  import main as explore
 from navigate import main as navigate
 from grasp    import main as grasp
@@ -30,14 +32,14 @@ from recover  import main as recover
 MAX_RETRIES = 3     # max attempts for the navigate → grasp → verify loop
 
 
-def run_pipeline():
+def run_pipeline(autonomous: bool = False):
     print("\n" + "=" * 60)
     print("  FULL PIPELINE START")
     print("=" * 60 + "\n")
 
     # ── Stage 1: Explore (runs once) ────────────────────────────────────
     print("[STAGE 1] Explore – scanning for ArUco tag …")
-    tag_pos = explore()
+    tag_pos = explore(autonomous=autonomous)
     if tag_pos is None:
         print("[ABORT] Tag not found during explore. Halting.")
         return
@@ -52,7 +54,7 @@ def run_pipeline():
 
         # ── Stage 2: Navigate ──────────────────────────────────────────
         print("[STAGE 2] Navigate – hovering above tag …")
-        hover_pos = navigate()
+        hover_pos = navigate(autonomous=autonomous)
         if hover_pos is None:
             print("[FAIL] Navigation cancelled or failed.")
             if attempt < MAX_RETRIES:
@@ -68,7 +70,7 @@ def run_pipeline():
         print("[STAGE 3] Grasp – close, check width + force …")
         # First attempt: descend 150 mm onto object.
         # Recovery attempts: navigate already re-positioned the TCP — just close.
-        grasp_result = grasp(close_only=(attempt > 1))
+        grasp_result = grasp(close_only=(attempt > 1), autonomous=autonomous)
 
         if grasp_result["result"] == "missed":
             print(f"[FAIL] Grasp missed on attempt {attempt}.")
@@ -121,8 +123,18 @@ def run_pipeline():
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Full pick-and-place pipeline.")
+    parser.add_argument(
+        "--autonomous", action="store_true",
+        help="Run fully autonomously — no SPACE/YES/ENTER prompts."
+    )
+    args = parser.parse_args()
+
+    mode_label = "AUTONOMOUS" if args.autonomous else "DEBUG"
+    print(f"[INFO] Mode: {mode_label}")
+
     try:
-        run_pipeline()
+        run_pipeline(autonomous=args.autonomous)
     except RuntimeError as e:
         if "PROTECTIVE STOP" in str(e):
             print("\n" + "!" * 60)
