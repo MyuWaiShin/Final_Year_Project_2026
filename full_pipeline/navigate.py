@@ -76,6 +76,12 @@ MOVE_ACCEL = 0.01   # m/s²
 # Arrival tolerance
 XYZ_TOL_M = 0.003   # metres
 
+# ── Horizontal centering ─────────────────────────────────────────────────
+# After hover, correct EEF along the camera's horizontal axis so the tag
+# is centred left-right in the image (aligns gripper gap with object).
+CENTER_H_TOL_PX  = 40   # pixels — stop when horizontal offset < this
+CENTER_H_MAX_ITER = 3    # max correction moves
+
 
 # ── Robot state reader (port 30002 secondary client) ────────────────────
 class RobotStateReader(threading.Thread):
@@ -318,6 +324,79 @@ def compute_hover_orientation(R_tag_base: np.ndarray,
         return (HOVER_RX, HOVER_RY, HOVER_RZ)
 
 
+# ── Horizontal centering ─────────────────────────────────────────────────
+def center_horizontal(videoQueue, detector, K, dist_coeffs, T_cam2flange,
+                      state: RobotStateReader, sender: URScriptSender):
+    """
+    Single-axis correction: move the EEF along the camera's horizontal axis
+    until the tag pixel centre is within CENTER_H_TOL_PX of the image midline.
+
+    Only touches EEF XY (via the camera-horizontal direction in base frame).
+    Z and orientation are unchanged.
+    """
+    print(f"  [Centre] Horizontal centering "
+          f"(tol {CENTER_H_TOL_PX}px, max {CENTER_H_MAX_ITER} moves) …")
+
+    fx = float(K[0, 0])
+    frame_cx = 640.0   # half of 1280
+
+    for i in range(1, CENTER_H_MAX_ITER + 1):
+        time.sleep(0.3)   # settle
+
+        # Try up to 15 frames for a clean detection
+        result = None
+        for _ in range(15):
+            frame  = videoQueue.get().getCvFrame()
+            grey   = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            corners, ids, _ = detector.detectMarkers(grey)
+            if ids is None:
+                continue
+            for j, mid in enumerate(ids.flatten()):
+                if mid != ARUCO_TAG_ID:
+                    continue
+                rvecs, tvecs, _ = aruco.estimatePoseSingleMarkers(
+                    corners[j:j+1], MARKER_SIZE, K, dist_coeffs
+                )
+                tvec    = tvecs[0][0]
+                c       = corners[j][0]
+                px_cx   = float(c[:, 0].mean())
+                result  = (px_cx, tvec)
+                break
+            if result is not None:
+                break
+
+        if result is None:
+            print(f"  [Centre {i}] Tag not visible — stopping.")
+            break
+
+        px_cx, tvec = result
+        delta_px    = px_cx - frame_cx
+        print(f"  [Centre {i}]  pixel offset: {delta_px:+.1f} px", end="")
+
+        if abs(delta_px) < CENTER_H_TOL_PX:
+            print(f"  → within {CENTER_H_TOL_PX}px — done.")
+            break
+
+        # Convert pixel offset → metres in camera frame (horizontal only)
+        delta_x_cam = delta_px * tvec[2] / fx
+
+        # Rotate camera-frame [δx, 0, 0] into base frame
+        tcp        = state.get_tcp_pose()
+        rx, ry, rz = tcp[3], tcp[4], tcp[5]
+        R_eef, _   = cv2.Rodrigues(np.array([rx, ry, rz], dtype=np.float64))
+        R_cam2base = R_eef @ T_cam2flange[:3, :3]
+        delta_base = R_cam2base @ np.array([delta_x_cam, 0.0, 0.0])
+
+        new_x = tcp[0] + delta_base[0]
+        new_y = tcp[1] + delta_base[1]
+        print(f"  →  dX={delta_base[0]:+.4f}  dY={delta_base[1]:+.4f} m")
+        movel(sender, state, new_x, new_y, tcp[2], rx, ry, rz)
+
+    final = state.get_tcp_pose()
+    print(f"  [Centre] EEF: X={final[0]:.4f}  Y={final[1]:.4f}")
+    return final
+
+
 # ── Main ────────────────────────────────────────────────────────────────
 def main(autonomous: bool = False):
     signal.signal(signal.SIGINT, lambda *_: os._exit(1))
@@ -485,6 +564,9 @@ def main(autonomous: bool = False):
             print("  Moving …")
             movel(sender, state, *target_pose, vel=MOVE_SPEED, acc=MOVE_ACCEL)
             print("  Hover reached.")
+            refined = center_horizontal(videoQueue, detector, K, dist_coeffs,
+                                        T_cam2flange, state, sender)
+            target_pose = refined
             break
 
         # ── Debug: SPACE + YES ───────────────────────────────────────────
@@ -513,6 +595,9 @@ def main(autonomous: bool = False):
             print("  Moving …")
             movel(sender, state, *target_pose, vel=MOVE_SPEED, acc=MOVE_ACCEL)
             print("  Hover reached.")
+            refined = center_horizontal(videoQueue, detector, K, dist_coeffs,
+                                        T_cam2flange, state, sender)
+            target_pose = refined
             break
 
     # Cleanup
