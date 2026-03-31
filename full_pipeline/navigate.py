@@ -61,7 +61,7 @@ HOVER_RZ  = 0.022
 # Calibration offsets (empirically tuned to correct residual X/Y errors)
 CALIB_X_OFFSET_M = -0.005
 CALIB_Y_OFFSET_M = -0.050
-CALIB_Z_OFFSET_M = -0.186   # TCP descends 18.6 cm below detected tag surface
+CALIB_Z_OFFSET_M = -0.000   # TCP descends 18.6 cm below detected tag surface
 
 # Move speed / acceleration
 MOVE_SPEED = 0.04   # m/s
@@ -402,7 +402,7 @@ def main():
     cv2.destroyAllWindows()
     device.close()
     print("\nDone.")
-    return tag_pos_base
+    return target_pose   # full [x, y, z, rx, ry, rz] — needed by grasp.py
 
 
 if __name__ == "__main__":

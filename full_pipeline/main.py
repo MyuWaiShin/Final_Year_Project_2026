@@ -20,8 +20,8 @@ Usage
 
 from explore  import main as explore
 from navigate import main as navigate
+from grasp    import main as grasp
 
-# from grasp    import main as grasp      # TODO
 # from verify   import main as verify     # TODO
 # from transit  import main as transit    # TODO
 # from release  import main as release    # TODO
@@ -49,8 +49,18 @@ def run_pipeline():
         return
     print(f"[STAGE 2] Complete – hovering at {[round(v, 4) for v in hover_pos]}\n")
 
-    # ── TODO: Stage 3+ ─────────────────────────────────────────────────
-    print("[INFO] Further stages (grasp, verify, transit, release) not yet implemented.")
+    # ── Stage 3: Grasp ──────────────────────────────────────────────────
+    print("[STAGE 3] Grasp – descend, close, check width + force …")
+    grasp_result = grasp()
+    if grasp_result["result"] == "missed":
+        print("[ABORT] Gripper closed on air — object missed. Halting.")
+        return
+    print(f"[STAGE 3] Complete – holding  "
+          f"width={grasp_result['width_mm']:.1f} mm  "
+          f"force={'YES' if grasp_result['force'] else 'NO'}\n")
+
+    # ── TODO: Stage 4+ ─────────────────────────────────────────────────
+    print("[INFO] Further stages (verify, transit, release) not yet implemented.")
     print("=" * 60)
     print("  PIPELINE END")
     print("=" * 60)
