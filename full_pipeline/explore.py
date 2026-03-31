@@ -71,7 +71,7 @@ SWEEP_ACCEL     =  0.1   # rad/s²
 
 # ── ArUco ───────────────────────────────────────────────────────────────
 ARUCO_DICT_TYPE = aruco.DICT_6X6_250
-ARUCO_TAG_ID    = 3
+ARUCO_TAG_ID    = 13
 MARKER_SIZE     = 0.021   # metres
 
 # ── Move speeds (to scan pose) ──────────────────────────────────────────
