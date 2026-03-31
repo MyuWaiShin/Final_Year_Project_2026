@@ -21,8 +21,8 @@ Usage
 from explore  import main as explore
 from navigate import main as navigate
 from grasp    import main as grasp
+from verify   import main as verify
 
-# from verify   import main as verify     # TODO
 # from transit  import main as transit    # TODO
 # from release  import main as release    # TODO
 # from recover  import main as recover    # TODO
@@ -59,8 +59,19 @@ def run_pipeline():
           f"width={grasp_result['width_mm']:.1f} mm  "
           f"force={'YES' if grasp_result['force'] else 'NO'}\n")
 
-    # ── TODO: Stage 4+ ─────────────────────────────────────────────────
-    print("[INFO] Further stages (verify, transit, release) not yet implemented.")
+    # ── Stage 4: Verify ────────────────────────────────────────────────
+    print("[STAGE 4] Verify – lift, tilt wrist, YOLO + CLIP check …")
+    verify_result = verify()
+    if verify_result["result"] == "empty":
+        print(f"[ABORT] Verify failed (score={verify_result['score']:.3f}) — "
+              f"YOLO={verify_result['yolo_conf']:.2f}  CLIP={verify_result['clip_conf']:.2f}. Halting.")
+        return
+    print(f"[STAGE 4] Complete – holding confirmed  "
+          f"score={verify_result['score']:.3f}  "
+          f"YOLO={verify_result['yolo_conf']:.2f}  CLIP={verify_result['clip_conf']:.2f}\n")
+
+    # ── TODO: Stage 5+ ─────────────────────────────────────────────────
+    print("[INFO] Further stages (transit, release) not yet implemented.")
     print("=" * 60)
     print("  PIPELINE END")
     print("=" * 60)

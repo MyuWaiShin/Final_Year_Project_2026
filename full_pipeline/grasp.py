@@ -69,7 +69,7 @@ GRIP_CLOSE_MM       = 0.0      # expected closed width (used in skip check)
 WIDTH_CLOSED_MM = 11.0    # <= this  → gripper fully snapped shut → missed
 
 # ── Motion parameters ────────────────────────────────────────────────────────
-DESCEND_OFFSET = 0.186    # metres — descend this far below hover Z to pick
+DESCEND_OFFSET = 0.150    # metres — descend this far below hover Z to pick
 MOVE_SPEED     = 0.04     # m/s  — normal moves (lift back up on miss)
 MOVE_ACCEL     = 0.01     # m/s²
 DESCEND_SPEED  = 0.02     # m/s  — slow descend onto object
