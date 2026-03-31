@@ -16,8 +16,19 @@ When the tag is seen, press SPACE to execute the move.
 Run standalone
 --------------
     python navigate.py
+
+Motion notes
+------------
+All robot motion is sent as raw URScript over a persistent socket on
+port 30002.  Robot state (TCP pose) is read from the same port's
+secondary-client packet stream in a background thread.
+No RTDEControlInterface or RTDEReceiveInterface is used — both caused
+unpredictable 10-second reconnect hangs on this setup (see
+pipeline_dev/RTDE_debug_log.md).
 """
 
+import os
+import signal
 import socket
 import struct
 import threading
@@ -28,15 +39,14 @@ import cv2
 import cv2.aruco as aruco
 import depthai as dai
 import numpy as np
-import rtde_control
-import rtde_receive
 
 # ── Paths ───────────────────────────────────────────────────────────────
 SCRIPT_DIR = Path(__file__).resolve().parent
 CALIB_DIR  = SCRIPT_DIR / "calibration"
 
 # ── Robot ───────────────────────────────────────────────────────────────
-ROBOT_IP = "192.168.8.102"
+ROBOT_IP   = "192.168.8.102"
+ROBOT_PORT = 30002
 
 # ── ArUco ───────────────────────────────────────────────────────────────
 ARUCO_DICT_TYPE = aruco.DICT_6X6_250
@@ -44,11 +54,9 @@ ARUCO_TAG_ID    = 3
 MARKER_SIZE     = 0.021   # metres – match your printed tag
 
 # ── Hover config ────────────────────────────────────────────────────────
-# Fixed hover Z in base frame (metres). Absolute – ignores the tag's detected Z.
 HOVER_Z_M = -0.050
 
-# TCP orientation (Rodrigues vector). Tuned to point straight down at the
-# desired wrist angle for the grasp approach.
+# TCP orientation (Rodrigues vector) — pointing straight down.
 HOVER_RX  = 2.225
 HOVER_RY  = 2.170
 HOVER_RZ  = 0.022
@@ -61,48 +69,189 @@ CALIB_Y_OFFSET_M = -0.050
 MOVE_SPEED = 0.04   # m/s
 MOVE_ACCEL = 0.01   # m/s²
 
+# Arrival tolerance
+XYZ_TOL_M = 0.003   # metres
 
-# ── Gripper Width Reader ────────────────────────────────────────────────
-class GripperWidthReader(threading.Thread):
-    def __init__(self, ip, port=30002):
+
+# ── Robot state reader (port 30002 secondary client) ────────────────────
+class RobotStateReader(threading.Thread):
+    """
+    Reads the UR secondary-client stream (port 30002) in a background thread.
+    Parses three sub-packet types from every Robot State message:
+
+      Type 1  Joint Data       → actual joint positions q[0..5]
+      Type 2  Tool Data        → AI2 voltage → gripper width
+      Type 4  Cartesian Info   → TCP pose [x,y,z,rx,ry,rz] in base frame
+
+    All values are updated at the robot's broadcast rate (~10 Hz on port 30002).
+    Thread reconnects automatically on socket errors.
+    """
+    def __init__(self, ip: str, port: int = ROBOT_PORT):
         super().__init__(daemon=True)
-        self.ip = ip; self.port = port
-        self._voltage = 0.0
-        self._lock = threading.Lock()
-        self._stop = threading.Event()
+        self.ip   = ip
+        self.port = port
+        self._lock      = threading.Lock()
+        self._stop_evt  = threading.Event()
+        self._ready_evt = threading.Event()
+        self._tcp_pose  = [0.0] * 6
+        self._joints    = [0.0] * 6
+        self._voltage   = 0.0
 
     def run(self):
-        while not self._stop.is_set():
+        while not self._stop_evt.is_set():
             try:
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                    s.settimeout(2.0); s.connect((self.ip, self.port))
-                    while not self._stop.is_set():
-                        hdr = s.recv(4)
-                        if not hdr or len(hdr) < 4: break
+                    s.settimeout(3.0)
+                    s.connect((self.ip, self.port))
+                    while not self._stop_evt.is_set():
+                        hdr = self._recvall(s, 4)
+                        if hdr is None:
+                            break
                         plen = struct.unpack("!I", hdr)[0]
-                        data = s.recv(plen - 4)
-                        off = 1
-                        while off < len(data):
-                            if off + 4 > len(data): break
-                            ps = struct.unpack("!I", data[off:off+4])[0]
-                            pt = data[off+4]
-                            if pt == 2 and off + 15 <= len(data):
-                                ai2 = struct.unpack("!d", data[off+7:off+15])[0]
-                                with self._lock:
-                                    self._voltage = max(ai2, 0.0)
-                            if ps == 0: break
-                            off += ps
+                        body = self._recvall(s, plen - 4)
+                        if body is None:
+                            break
+                        self._parse_subpackets(body[1:])
             except Exception:
                 time.sleep(0.5)
 
-    def get_width_mm(self):
-        with self._lock: v = self._voltage
+    @staticmethod
+    def _recvall(s, n: int):
+        buf = b""
+        while len(buf) < n:
+            chunk = s.recv(n - len(buf))
+            if not chunk:
+                return None
+            buf += chunk
+        return buf
+
+    def _parse_subpackets(self, data: bytes):
+        off = 0
+        got_something = False
+        while off < len(data):
+            if off + 5 > len(data):
+                break
+            ps = struct.unpack("!I", data[off:off+4])[0]
+            if ps < 5 or off + ps > len(data):
+                break
+            pt = data[off + 4]
+
+            if pt == 1 and ps >= 251:
+                joints = []
+                for j in range(6):
+                    base = off + 5 + j * 41
+                    q = struct.unpack("!d", data[base:base+8])[0]
+                    joints.append(q)
+                with self._lock:
+                    self._joints = joints
+                got_something = True
+
+            elif pt == 2 and ps >= 15:
+                ai = struct.unpack("!d", data[off+7:off+15])[0]
+                with self._lock:
+                    self._voltage = max(ai, 0.0)
+
+            elif pt == 4 and ps >= 53:
+                pose = list(struct.unpack("!6d", data[off+5:off+53]))
+                with self._lock:
+                    self._tcp_pose = pose
+                got_something = True
+
+            off += ps
+
+        if got_something:
+            self._ready_evt.set()
+
+    def wait_ready(self, timeout: float = 5.0) -> bool:
+        return self._ready_evt.wait(timeout=timeout)
+
+    def get_joint_positions(self) -> list:
+        with self._lock:
+            return list(self._joints)
+
+    def get_tcp_pose(self) -> list:
+        with self._lock:
+            return list(self._tcp_pose)
+
+    def get_width_mm(self) -> float:
+        with self._lock:
+            v = self._voltage
         raw_mm = (v / 3.7) * 110.0
         slope  = (91.0 - 10.5) / (65.8 - 8.5)
         offset = 10.5 - (8.5 * slope)
         return max(0.0, round((raw_mm * slope) + offset, 1))
 
-    def stop(self): self._stop.set()
+    def stop(self):
+        self._stop_evt.set()
+
+
+# ── URScript sender (port 30002, persistent socket) ─────────────────────
+class URScriptSender:
+    """
+    Persistent TCP socket to port 30002 for sending URScript commands.
+    A drain thread discards incoming secondary data to prevent the OS
+    recv buffer from filling and blocking sendall().
+    """
+    def __init__(self, ip: str, port: int = ROBOT_PORT):
+        self.ip   = ip
+        self.port = port
+        self._lock = threading.Lock()
+        self._sock = self._connect()
+        threading.Thread(target=self._drain, daemon=True).start()
+
+    def _connect(self):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(5.0)
+        s.connect((self.ip, self.port))
+        return s
+
+    def _drain(self):
+        while True:
+            try:
+                self._sock.recv(4096)
+            except Exception:
+                time.sleep(0.01)
+
+    def send(self, script: str):
+        payload = (script.strip() + "\n").encode()
+        with self._lock:
+            try:
+                self._sock.sendall(payload)
+            except Exception:
+                try:
+                    self._sock = self._connect()
+                    self._sock.sendall(payload)
+                except Exception as e:
+                    print(f"  [URScript] Send failed: {e}")
+
+    def close(self):
+        try:
+            self._sock.close()
+        except Exception:
+            pass
+
+
+# ── Motion helper ────────────────────────────────────────────────────────
+def movel(sender: URScriptSender, state: RobotStateReader,
+          x, y, z, rx, ry, rz,
+          vel: float = MOVE_SPEED, acc: float = MOVE_ACCEL,
+          tol: float = XYZ_TOL_M, timeout: float = 30.0):
+    """
+    Send movel(p[...]) and poll RobotStateReader TCP pose for arrival.
+    """
+    cur = state.get_tcp_pose()
+    if ((cur[0]-x)**2 + (cur[1]-y)**2 + (cur[2]-z)**2) ** 0.5 < tol:
+        return   # already there
+
+    sender.send(
+        f"movel(p[{x:.6f},{y:.6f},{z:.6f},{rx:.6f},{ry:.6f},{rz:.6f}],a={acc:.4f},v={vel:.4f})"
+    )
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        cur = state.get_tcp_pose()
+        if ((cur[0]-x)**2 + (cur[1]-y)**2 + (cur[2]-z)**2) ** 0.5 < tol:
+            return
+        time.sleep(0.01)
 
 
 # ── Helper ──────────────────────────────────────────────────────────────
@@ -114,10 +263,12 @@ def tcp_to_matrix(tcp_pose):
 
 # ── Main ────────────────────────────────────────────────────────────────
 def main():
+    signal.signal(signal.SIGINT, lambda *_: os._exit(1))
+
     # Load calibration
     print("Loading calibration …")
     K            = np.load(CALIB_DIR / "camera_matrix.npy")
-    dist         = np.zeros((4, 1))
+    dist_coeffs  = np.zeros((4, 1))
     T_cam2flange = np.load(CALIB_DIR / "T_cam2flange.npy")
     print("  camera_matrix.npy  ✓")
     print("  T_cam2flange.npy   ✓\n")
@@ -128,13 +279,13 @@ def main():
 
     # Robot
     print("Connecting to robot …")
-    rtde_r = rtde_receive.RTDEReceiveInterface(ROBOT_IP)
-    rtde_c = rtde_control.RTDEControlInterface(ROBOT_IP)
+    state  = RobotStateReader(ROBOT_IP)
+    sender = URScriptSender(ROBOT_IP)
+    state.start()
+    if not state.wait_ready(timeout=5.0):
+        raise RuntimeError("Robot state reader did not receive data within 5 s — "
+                           "is the robot reachable at " + ROBOT_IP + "?")
     print("Robot connected!\n")
-
-    gripper = GripperWidthReader(ROBOT_IP)
-    gripper.start()
-    time.sleep(0.8)
 
     # Camera
     pipeline = dai.Pipeline()
@@ -173,24 +324,22 @@ def main():
                     continue
 
                 rvecs, tvecs, _ = aruco.estimatePoseSingleMarkers(
-                    corners[i:i+1], MARKER_SIZE, K, dist
+                    corners[i:i+1], MARKER_SIZE, K, dist_coeffs
                 )
                 rvec, tvec = rvecs[0][0], tvecs[0][0]
-                cv2.drawFrameAxes(frame, K, dist, rvec, tvec, MARKER_SIZE * 0.5)
+                cv2.drawFrameAxes(frame, K, dist_coeffs, rvec, tvec, MARKER_SIZE * 0.5)
 
-                # Project tag centre for visual overlay
                 img_pts, _ = cv2.projectPoints(
-                    np.array([[0.0, 0.0, 0.0]], dtype=np.float32), rvec, tvec, K, dist
+                    np.array([[0.0, 0.0, 0.0]], dtype=np.float32), rvec, tvec, K, dist_coeffs
                 )
                 cx_img = int(img_pts[0][0][0]); cy_img = int(img_pts[0][0][1])
                 cv2.circle(frame, (cx_img, cy_img), 6, (0, 255, 0), -1)
                 cv2.putText(frame, f"pix ({cx_img},{cy_img})", (cx_img + 8, cy_img - 8),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1)
 
-                # Transform: camera → flange → base
                 R_tag, _ = cv2.Rodrigues(rvec)
                 T_tag2cam = np.eye(4); T_tag2cam[:3, :3] = R_tag; T_tag2cam[:3, 3] = tvec
-                tcp_pose   = rtde_r.getActualTCPPose()
+                tcp_pose   = state.get_tcp_pose()
                 T_tcp2base = tcp_to_matrix(tcp_pose)
                 T_tag2tcp  = T_cam2flange @ T_tag2cam
                 T_tag2base = T_tcp2base   @ T_tag2tcp
@@ -230,8 +379,8 @@ def main():
 
             bx, by, _ = tag_pos_base
             target_pose = [bx, by, HOVER_Z_M, HOVER_RX, HOVER_RY, HOVER_RZ]
-            current_tcp = rtde_r.getActualTCPPose()
-            dist_mm = np.linalg.norm(np.array(target_pose[:3]) - np.array(current_tcp[:3])) * 1000
+            cur_tcp = state.get_tcp_pose()
+            dist_mm = np.linalg.norm(np.array(target_pose[:3]) - np.array(cur_tcp[:3])) * 1000
 
             print("\n" + "=" * 60)
             print(f"  Tag base frame:  X={bx:.4f}  Y={by:.4f}")
@@ -245,19 +394,15 @@ def main():
                 continue
 
             print("  Moving …")
-            try:
-                rtde_c.moveL(target_pose, MOVE_SPEED, MOVE_ACCEL)
-                print("  Hover reached.")
-                break   # exit loop after successful navigation
-            except Exception as e:
-                print(f"  Move failed: {e}")
+            movel(sender, state, *target_pose, vel=MOVE_SPEED, acc=MOVE_ACCEL)
+            print("  Hover reached.")
+            break
 
     # Cleanup
-    gripper.stop()
+    state.stop()
+    sender.close()
     cv2.destroyAllWindows()
     device.close()
-    rtde_r.disconnect()
-    rtde_c.stopScript()
     print("\nDone.")
     return tag_pos_base
 
