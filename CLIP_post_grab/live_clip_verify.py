@@ -13,7 +13,7 @@ except ImportError:
     print("depthai is needed for live camera feed. pip install depthai")
     sys.exit(1)
 
-def load_probe_classifier(pkl_path="clip_probe.pkl"):
+def load_probe_classifier(pkl_path="clip_probe_v2.pk"):
     """Loads the trained Logistic Regression model."""
     script_dir = os.path.dirname(os.path.abspath(__file__))
     full_path = os.path.join(script_dir, pkl_path)

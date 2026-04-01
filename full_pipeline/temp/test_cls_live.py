@@ -8,11 +8,11 @@ overlaying the predicted class and confidence on screen.
 
 Usage
 -----
-    # Test v1 (default)
+    # Test yolov8n (default)
     python temp/test_cls_live.py
 
-    # Test v2
-    python temp/test_cls_live.py --model v2
+    # Test yolo26n
+    python temp/test_cls_live.py --model v26
 
     # Test both side-by-side
     python temp/test_cls_live.py --model both
@@ -33,11 +33,11 @@ from ultralytics import YOLO
 
 # ── Paths ────────────────────────────────────────────────────────────────
 SCRIPT_DIR = Path(__file__).resolve().parent
-WEIGHTS_DIR = SCRIPT_DIR.parent / "yolo_binary_classifiers"
+MODELS_DIR = SCRIPT_DIR.parent / "models" / "classification"
 
 MODEL_PATHS = {
-    "v1": WEIGHTS_DIR / "empty_holding_v1"      / "weights" / "best.pt",
-    "v2": WEIGHTS_DIR / "empty_holding_cls_v2"  / "weights" / "best.pt",
+    "v8":  MODELS_DIR / "yolov8n_cls_V1" / "weights" / "best.pt",
+    "v26": MODELS_DIR / "yolo26n_cls_V1" / "weights" / "best.pt",
 }
 
 # Colour per class: green = holding, red = empty
@@ -93,13 +93,13 @@ def open_camera():
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model", choices=["v1", "v2", "both"], default="v1",
-                    help="Which model to test (default: v1)")
+    ap.add_argument("--model", choices=["v8", "v26", "both"], default="v8",
+                    help="Which model to test (default: v8)")
     args = ap.parse_args()
 
     print("Loading model(s) …")
     if args.model == "both":
-        models = {k: load_model(k) for k in ("v1", "v2")}
+        models = {k: load_model(k) for k in ("v8", "v26")}
     else:
         models = {args.model: load_model(args.model)}
     print("Models ready.\n")
@@ -123,12 +123,12 @@ def main():
 
         # ── Overlay ──────────────────────────────────────────────────────
         if args.model == "both":
-            name_v1, conf_v1 = results["v1"]
-            name_v2, conf_v2 = results["v2"]
-            col_v1 = CLASS_COLOURS.get(name_v1, (255, 255, 255))
-            col_v2 = CLASS_COLOURS.get(name_v2, (255, 255, 255))
-            overlay(frame, f"v1: {name_v1}", conf_v1, col_v1, x=10, y=45)
-            overlay(frame, f"v2: {name_v2}", conf_v2, col_v2, x=10, y=90)
+            name_v8,  conf_v8  = results["v8"]
+            name_v26, conf_v26 = results["v26"]
+            col_v8  = CLASS_COLOURS.get(name_v8,  (255, 255, 255))
+            col_v26 = CLASS_COLOURS.get(name_v26, (255, 255, 255))
+            overlay(frame, f"v8:  {name_v8}",  conf_v8,  col_v8,  x=10, y=45)
+            overlay(frame, f"v26: {name_v26}", conf_v26, col_v26, x=10, y=90)
         else:
             key = args.model
             name, conf = results[key]
@@ -145,7 +145,7 @@ def main():
         cv2.putText(frame, f"{fps:.1f} fps", (10, frame.shape[0] - 12),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (160, 160, 160), 1)
 
-        cv2.imshow("YOLO classifier — Q to quit", cv2.resize(frame, (960, 540)))
+        cv2.imshow("YOLO classifier", cv2.resize(frame, (960, 540)))
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 

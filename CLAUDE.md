@@ -87,19 +87,21 @@ python Calibration/eye_in_hand/test_aruco.py          # Validate ArUco detection
 ```bash
 python pipeline_dev/scripts/01_camera_test.py
 python pipeline_dev/scripts/05_robot_move_test.py
-python full_pipeline/temp/minimal_test.py
+# pipeline_dev/scripts/ has 30+ numbered component tests (00–12)
 ```
 
 ## Architecture
 
 ### 7-Stage Pipeline (`full_pipeline/main.py`)
+Runs in **DEBUG** mode (prompts before each stage) or **AUTONOMOUS** mode. Each stage retries up to 3 times before calling Recover.
+
 1. **Explore** (`explore.py`) — Robot joint sweep, ArUco tag detection → base-frame tag pose
 2. **Navigate** (`navigate.py`) — Align TCP above tag at hover height
-3. **Grasp** — Lower, close gripper, lift *(TODO)*
-4. **Verify** — CLIP post-grasp verification *(TODO)*
+3. **Grasp** (`grasp.py`) — Lower, close gripper, validate width + force
+4. **Verify** (`verify.py`) — YOLO + CLIP dual check post-grasp
 5. **Transit** — Move to drop zone with slip monitoring *(TODO)*
 6. **Release** — Open gripper, confirm drop *(TODO)*
-7. **Recover** — Unified re-grasp recovery *(TODO)*
+7. **Recover** (`recover.py`) — Open gripper, rise 40 cm, re-enter retry loop
 
 ### Key Coordinate Transforms
 - **Camera → TCP**: solved by hand-eye calibration → `full_pipeline/calibration/T_cam2flange.npy`
@@ -131,9 +133,12 @@ python full_pipeline/temp/minimal_test.py
 
 | File | Purpose |
 |------|---------|
-| `full_pipeline/main.py` | Top-level pipeline orchestrator |
+| `full_pipeline/main.py` | Top-level pipeline orchestrator (DEBUG/AUTONOMOUS modes) |
 | `full_pipeline/explore.py` | Robot scan + ArUco detection (300+ lines) |
 | `full_pipeline/navigate.py` | TCP alignment above target (267 lines) |
+| `full_pipeline/grasp.py` | Descent, grip, width+force validation |
+| `full_pipeline/verify.py` | YOLO + CLIP dual post-grasp check |
+| `full_pipeline/recover.py` | Rise, open gripper, re-enter retry loop |
 | `UR10/pick_and_place.py` | Multi-threaded pick-and-place with parallel monitoring |
 | `UR10/failure_detection_pipeline.py` | Advanced failure detection (800+ lines) |
 | `Train/train.py` | Unified YOLO trainer (v5/v8/v26) |
@@ -144,7 +149,8 @@ python full_pipeline/temp/minimal_test.py
 
 ## Notes
 
-- ArUco config is hardcoded: tag ID 3, `DICT_6X6_250`, 21mm marker size
+- ArUco config is hardcoded: tag ID **13**, `DICT_6X6_250`, 21mm marker size
+- `transformers` must be pinned to `4.38.0` — newer versions break `groundingdino-py` in the annotation env
 - `pipeline_dev/` contains 30+ iterative dev/debug scripts — useful as reference for component behavior
 - Debug logs in `pipeline_dev/RTDE_debug_log.md` and `slip_detection_debug_log.md`
 - Robot movement timing: 3.5–6.0s per operation (see `UR10/README.md`)
