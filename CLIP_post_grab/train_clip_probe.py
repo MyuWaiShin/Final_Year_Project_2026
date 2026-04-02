@@ -22,9 +22,9 @@ def main():
     model, preprocess = clip.load("ViT-B/32", device=device)
 
     # Directories
-    base_dir = os.path.join(os.path.dirname(__file__), "clip_dataset", "cropped")
+    base_dir    = r"C:\Users\myuwa\.gemini\antigravity\scratch\Final_Year_Project_2026\full_pipeline\temp\classification"
     holding_dir = os.path.join(base_dir, "holding")
-    empty_dir = os.path.join(base_dir, "empty")
+    empty_dir   = os.path.join(base_dir, "empty")
 
     holding_images = glob.glob(os.path.join(holding_dir, "*.png")) + glob.glob(os.path.join(holding_dir, "*.jpg"))
     empty_images = glob.glob(os.path.join(empty_dir, "*.png")) + glob.glob(os.path.join(empty_dir, "*.jpg"))
@@ -94,7 +94,7 @@ def main():
         clf.fit(X, y)
 
     # Save the trained model parameters to a file
-    model_save_path = os.path.join(os.path.dirname(__file__), "clip_probe.pkl")
+    model_save_path = os.path.join(os.path.dirname(__file__), "clip_probe_v2.pkl")
     with open(model_save_path, "wb") as f:
         pickle.dump(clf, f)
 

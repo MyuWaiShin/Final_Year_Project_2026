@@ -1,0 +1,8 @@
+{
+  "_comment": "Drop zone position. Z is set at runtime to clearance_z by transit.py.",
+  "x": -0.638908,
+  "y": -0.49173,
+  "rx": 1.798707,
+  "ry": 2.526115,
+  "rz": 0.046984
+}

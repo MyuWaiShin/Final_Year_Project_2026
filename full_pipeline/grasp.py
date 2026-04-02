@@ -52,7 +52,7 @@ import time
 from pathlib import Path
 
 # ── Paths ───────────────────────────────────────────────────────────────────
-SCRIPT_DIR = Path(__file__).resolve().parent
+SCRIPT_DIR    = Path(__file__).resolve().parent
 
 # ── Robot ───────────────────────────────────────────────────────────────────
 ROBOT_IP      = "192.168.8.102"
@@ -69,8 +69,8 @@ GRIP_CLOSE_MM       = 0.0      # expected closed width (used in skip check)
 WIDTH_CLOSED_MM = 11.0    # <= this  → gripper fully snapped shut → missed
 
 # ── Motion parameters ────────────────────────────────────────────────────────
-DESCEND_OFFSET          = 0.150   # metres — full descent below hover Z (first attempt)
-RECOVERY_DESCEND_OFFSET = 0.010   # metres — short descent used in recovery mode
+DESCEND_OFFSET          = 0.070   # metres — full descent below hover Z
+RECOVERY_DESCEND_OFFSET = 0.070   # metres — recovery mode descent
 MOVE_SPEED     = 0.04     # m/s  — normal moves (lift back up on miss)
 MOVE_ACCEL     = 0.01     # m/s²
 DESCEND_SPEED  = 0.02     # m/s  — slow descend onto object
@@ -453,6 +453,7 @@ def main(descend_m: float = None, close_only: bool = False,
     # ── Read hover pose from robot (navigate already left it here) ──────────
     hover_pose = state.get_tcp_pose()
     hx, hy, hz, hrx, hry, hrz = hover_pose
+
     pick_z = hz - descent
 
     print("\n" + "=" * 58)

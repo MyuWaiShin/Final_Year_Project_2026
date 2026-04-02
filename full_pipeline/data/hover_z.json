@@ -1,0 +1,5 @@
+{
+  "_comment": "pick_z captured by jogging. hover_z = pick_z + 70mm (DESCEND_OFFSET).",
+  "pick_z": -0.460422,
+  "hover_z": -0.390422
+}
