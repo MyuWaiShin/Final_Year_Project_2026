@@ -1,0 +1,5 @@
+{
+  "_comment": "Drop zone XY only. Z set at runtime to clearance_z. Orientation kept from robot at transit time.",
+  "x": -0.642832,
+  "y": -0.473189
+}
