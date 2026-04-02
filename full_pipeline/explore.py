@@ -83,6 +83,11 @@ CONF_THRESHOLD   = 0.80    # YOLO confidence
 CENTER_TOL_PX    = 80      # px — stop sweep when object within this of frame centre
 CENTER_CONSEC    = 3       # consecutive centred frames required before stopping
 
+# ── Active recentering (post-sweep J0 correction) ─────────────────────────────
+RECENTER_TOL_PX   = 20     # px — target tolerance for J0 recentering
+RECENTER_MAX_ITER = 6      # max correction moves
+RECENTER_GAIN     = 0.0008 # J0 radians per pixel of offset (tune if needed)
+
 # ── Camera ────────────────────────────────────────────────────────────────────
 VIDEO_W      = 1280
 VIDEO_H      = 720
@@ -333,33 +338,15 @@ def _compute_lower_tcp(scan_tcp, T_cam2flange, lower_m, table_z):
         return None
 
 
-# ── Detection (ArUco first, YOLO fallback) ────────────────────────────────────
-def detect_objects(frame, K, dist_coeffs, aruco_detector, yolo_model):
+# ── Detection (YOLO only) ────────────────────────────────────────────────────────
+def detect_objects(frame, yolo_model):
     """
-    Run ArUco detection first; if not found, run YOLO.
+    YOLO-only detection used during the sweep to find and centre the object.
     Annotates frame in-place.
 
-    Returns (found: bool, pixel_x: float|None, mode: str|None)
-      pixel_x — horizontal pixel of the target centre in the video frame
-      mode    — "aruco" or "yolo_only"
+    Returns (found: bool, pixel_x: float|None)
+      pixel_x — horizontal pixel of the highest-confidence detection centre
     """
-    grey = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-    # ── ArUco ─────────────────────────────────────────────────────────────────
-    corners, ids, _ = aruco_detector.detectMarkers(grey)
-    if ids is not None:
-        aruco.drawDetectedMarkers(frame, corners, ids)
-        for i, mid in enumerate(ids.flatten()):
-            if mid != ARUCO_TAG_ID:
-                continue
-            rvecs, tvecs, _ = aruco.estimatePoseSingleMarkers(
-                corners[i:i+1], MARKER_SIZE, K, dist_coeffs)
-            cv2.drawFrameAxes(frame, K, dist_coeffs,
-                               rvecs[0][0], tvecs[0][0], MARKER_SIZE * 0.5)
-            pixel_x = float(corners[i][0][:, 0].mean())
-            return True, pixel_x, "aruco"
-
-    # ── YOLO ─────────────────────────────────────────────────────────────────
     results = yolo_model(frame, imgsz=640, conf=CONF_THRESHOLD, verbose=False)
     r = results[0]
     if r.boxes is not None and len(r.boxes) > 0:
@@ -371,9 +358,61 @@ def detect_objects(frame, K, dist_coeffs, aruco_detector, yolo_model):
         cv2.putText(frame, f"YOLO {label} {conf*100:.0f}%", (x1, y1 - 8),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 165, 255), 2)
         pixel_x = (x1 + x2) / 2.0
-        return True, pixel_x, "yolo_only"
+        return True, pixel_x
+    return False, None
 
-    return False, None, None
+
+def _recenter_j0(sender, state, videoQueue, yolo_model, frame_cx):
+    """
+    Active J0 recentering loop.
+    Rotates J0 proportionally to the YOLO pixel offset until the object
+    is within RECENTER_TOL_PX of the frame centre, or max iterations reached.
+    Called once the sweep has already stopped on a detection.
+    """
+    print(f"  [Recenter] Correcting J0 to centre object "
+          f"(tol={RECENTER_TOL_PX}px, max={RECENTER_MAX_ITER} moves) …")
+
+    for i in range(1, RECENTER_MAX_ITER + 1):
+        time.sleep(0.25)   # let arm settle
+
+        # Try up to 10 frames to get a fresh detection
+        pixel_x = None
+        for _ in range(10):
+            frame = videoQueue.get().getCvFrame()
+            found, px = detect_objects(frame, yolo_model)
+            if found:
+                pixel_x = px
+                break
+
+        if pixel_x is None:
+            print(f"  [Recenter {i}] Object not visible — stopping.")
+            break
+
+        offset_px = pixel_x - frame_cx
+        print(f"  [Recenter {i}]  offset={offset_px:+.1f}px", end="")
+
+        if abs(offset_px) < RECENTER_TOL_PX:
+            print(f"  → within {RECENTER_TOL_PX}px — centred.")
+            break
+
+        # Proportional J0 correction
+        # Negative: object displaced right (+px) → rotate J0 counterclockwise (-rad)
+        delta_j0 = -offset_px * RECENTER_GAIN
+        joints    = state.get_joint_positions()
+        joints[0] += delta_j0
+        q_str = ",".join(f"{j:.6f}" for j in joints)
+        sender.send(f"movej([{q_str}],a={SWEEP_ACCEL:.4f},v={SWEEP_SPEED:.4f})")
+        print(f"  → J0 Δ={delta_j0:+.4f} rad")
+
+        # Wait for J0 to arrive
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            if abs(state.get_joint_positions()[0] - joints[0]) < 0.005:
+                break
+            time.sleep(0.01)
+
+    final_joints = state.get_joint_positions()
+    print(f"  [Recenter] Done at J0={final_joints[0]:.4f} rad")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -497,40 +536,31 @@ def main(autonomous: bool = False):
 
         while not sweep_done.is_set():
             frame = videoQueue.get().getCvFrame()
-            found, pixel_x, mode = detect_objects(
-                frame, K, dist_coeffs, aruco_detector, yolo_model)
+            found, pixel_x = detect_objects(frame, yolo_model)
 
-            if found:
-                result["found"] = True
-                result["mode"]  = mode
+            if found and not result["centred"]:
+                result["found"]   = True
+                result["centred"] = True
+                result["mode"]    = "yolo_only"
                 offset_px = pixel_x - frame_cx
-                centred   = abs(offset_px) < CENTER_TOL_PX
+                print(f"  ✓ Object detected [YOLO]  offset={offset_px:+.1f}px — stopping sweep")
+                stopj(sender, SWEEP_STOP_ACCEL)
 
-                if centred:
-                    consec_centred[0] += 1
-                else:
-                    consec_centred[0] = 0
-
-                if consec_centred[0] >= CENTER_CONSEC and not result["centred"]:
-                    result["centred"] = True
-                    print(f"  ✓ Object centred [{mode}]  offset={offset_px:+.0f}px  "
-                          f"({CENTER_CONSEC} consecutive) — stopping sweep")
-                    stopj(sender, SWEEP_STOP_ACCEL)
-
-                # Overlay
+            # Overlay
+            if found and pixel_x is not None:
                 cx_draw = int(pixel_x)
                 cv2.line(frame, (cx_draw, 0), (cx_draw, VIDEO_H), (0, 255, 0), 1)
                 cv2.line(frame, (int(frame_cx), 0), (int(frame_cx), VIDEO_H),
                          (255, 255, 255), 1)
-                offset_str = f"offset={offset_px:+.0f}px"
-                status = (f"CENTRED [{mode}]  {offset_str}"
+                offset_px = pixel_x - frame_cx
+                status = (f"DETECTED [YOLO]  offset={offset_px:+.0f}px — recentering …"
                           if result["centred"] else
-                          f"DETECTED [{mode}]  {offset_str} — centering …")
+                          f"DETECTED [YOLO]  offset={offset_px:+.0f}px")
                 cv2.putText(frame, status, (10, 35),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 255, 0), 2)
             else:
                 cv2.putText(frame,
-                            f"Sweep {sweep_num}/{SCAN_MAX_SWEEPS} — searching (ArUco + YOLO) …",
+                            f"Sweep {sweep_num}/{SCAN_MAX_SWEEPS} — searching (YOLO) …",
                             (10, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 0, 255), 2)
 
             cv2.imshow("explore", cv2.resize(frame, (960, 540)))
@@ -540,6 +570,10 @@ def main(autonomous: bool = False):
                 break
 
         sweep_thread.join(timeout=2.0)
+
+        # ── Active recentering: bring object to frame centre via J0 ───────────
+        if result["centred"]:
+            _recenter_j0(sender, state, videoQueue, yolo_model, frame_cx)
 
         if result["centred"]:
             break   # done — centred detection achieved

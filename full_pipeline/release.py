@@ -46,7 +46,7 @@ GRIP_OPEN_URP = "/programs/myu/open_gripper.urp"
 GRIP_OPEN_MM  = 85.0
 
 # ── Drop geometry ─────────────────────────────────────────────────────────────
-DROP_HEIGHT_M = 0.600   # metres to descend below clearance_z — brings TCP back to hover_z
+DROP_HEIGHT_M = 0.500   # metres to descend below clearance_z — brings TCP back to hover_z
 
 # ── Motion ────────────────────────────────────────────────────────────────────
 MOVE_SPEED     = 0.04   # m/s — horizontal + rise

@@ -59,7 +59,7 @@ HOVER_RY = 2.170
 HOVER_RZ = 0.022
 
 # ── Clearance height ─────────────────────────────────────────────────────────
-CLEARANCE_OFFSET_M = 0.60   # metres above hover Z
+CLEARANCE_OFFSET_M = 0.40   # metres above hover Z
 
 # ── Stability (autonomous mode) ───────────────────────────────────────────────
 STABLE_FRAMES_NEEDED = 8

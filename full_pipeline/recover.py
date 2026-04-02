@@ -51,7 +51,7 @@ DASHBOARD_PORT = 29999
 GRIP_OPEN_URP = "/programs/myu/open_gripper.urp"
 GRIP_OPEN_MM  = 85.0
 
-# ── Search circle ─────────────────────────────────────────────────────────────
+# ── Search circle ───────────────────────────────────────────────────────────
 SEARCH_RADIUS_M = 0.060   # 60 mm
 
 # ── Detection / centring ──────────────────────────────────────────────────────
@@ -64,9 +64,17 @@ VIDEO_W, VIDEO_H = 1280, 720
 MANUAL_FOCUS    = 46
 
 # ── Motion ─────────────────────────────────────────────────────────────────────
-MOVE_SPEED = 0.06
-MOVE_ACCEL = 0.02
-XYZ_TOL_M  = 0.005
+MOVE_SPEED    = 0.06
+MOVE_ACCEL    = 0.02
+XYZ_TOL_M     = 0.005
+JOINT_SPEED   = 0.5
+JOINT_ACCEL   = 0.3
+JOINT_TOL_RAD = 0.01
+
+# ── Active recentering (post-circle J0 correction) ───────────────────────────
+RECENTER_TOL_PX   = 20
+RECENTER_MAX_ITER = 6
+RECENTER_GAIN     = 0.0008  # J0 radians per pixel of offset
 
 
 # ── Robot state reader ────────────────────────────────────────────────────────
@@ -78,6 +86,7 @@ class RobotStateReader(threading.Thread):
         self._stop_evt  = threading.Event()
         self._ready_evt = threading.Event()
         self._tcp_pose  = [0.0] * 6
+        self._joints    = [0.0] * 6
         self._voltage   = 0.0
 
     def run(self):
@@ -117,7 +126,15 @@ class RobotStateReader(threading.Thread):
             if ps < 5 or off + ps > len(data):
                 break
             pt = data[off + 4]
-            if pt == 2 and ps >= 15:
+            if pt == 1 and ps >= 251:
+                joints = []
+                for j in range(6):
+                    base = off + 5 + j * 41
+                    joints.append(struct.unpack("!d", data[base:base+8])[0])
+                with self._lock:
+                    self._joints = joints
+                got = True
+            elif pt == 2 and ps >= 15:
                 with self._lock:
                     self._voltage = max(struct.unpack("!d", data[off+7:off+15])[0], 0.0)
             elif pt == 4 and ps >= 53:
@@ -134,6 +151,10 @@ class RobotStateReader(threading.Thread):
     def get_tcp_pose(self):
         with self._lock:
             return list(self._tcp_pose)
+
+    def get_joint_positions(self):
+        with self._lock:
+            return list(self._joints)
 
     def get_width_mm(self):
         with self._lock:
@@ -247,6 +268,90 @@ def _movel(sender, state, x, y, z, rx, ry, rz, timeout=30.0, stop_check=None):
     print("  [Recover] movel timeout — continuing.")
 
 
+def _movej(sender, state, joints, timeout=30.0):
+    cur = state.get_joint_positions()
+    if max(abs(c - t) for c, t in zip(cur, joints)) < JOINT_TOL_RAD:
+        return
+    q_str = ",".join(f"{j:.6f}" for j in joints)
+    sender.send(f"movej([{q_str}],a={JOINT_ACCEL:.4f},v={JOINT_SPEED:.4f})")
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        cur = state.get_joint_positions()
+        if max(abs(c - t) for c, t in zip(cur, joints)) < JOINT_TOL_RAD:
+            return
+        time.sleep(0.01)
+    print("  [Recover] movej timeout — continuing.")
+
+
+def _recenter_j0(sender, state, queue, yolo_model, frame_cx):
+    """
+    Active J0 recentering after the circle stops on first detection.
+    Rotates J0 proportionally to the YOLO pixel offset until within
+    RECENTER_TOL_PX of frame centre, or max iterations reached.
+    """
+    print(f"  [Recenter] Correcting J0 "
+          f"(tol={RECENTER_TOL_PX}px, max={RECENTER_MAX_ITER} moves) …")
+
+    for i in range(1, RECENTER_MAX_ITER + 1):
+        time.sleep(0.25)
+
+        pixel_x = None
+        for _ in range(10):
+            frame = queue.get().getCvFrame()
+            results = yolo_model(frame, imgsz=640, conf=CONF_THRESHOLD, verbose=False)
+            r = results[0]
+            if r.boxes is not None and len(r.boxes) > 0:
+                best = max(r.boxes, key=lambda b: float(b.conf[0]))
+                x1, y1, x2, y2 = map(int, best.xyxy[0])
+                pixel_x = (x1 + x2) / 2.0
+                break
+
+        if pixel_x is None:
+            print(f"  [Recenter {i}] Object not visible — stopping.")
+            break
+
+        offset_px = pixel_x - frame_cx
+        print(f"  [Recenter {i}]  offset={offset_px:+.1f}px", end="")
+
+        if abs(offset_px) < RECENTER_TOL_PX:
+            print(f"  → within {RECENTER_TOL_PX}px — centred.")
+            break
+
+        delta_j0 = -offset_px * RECENTER_GAIN
+        joints    = state.get_joint_positions()
+        joints[0] += delta_j0
+        q_str = ",".join(f"{j:.6f}" for j in joints)
+        sender.send(f"movej([{q_str}],a={JOINT_ACCEL:.4f},v={JOINT_SPEED:.4f})")
+        print(f"  → J0 Δ={delta_j0:+.4f} rad")
+
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            if abs(state.get_joint_positions()[0] - joints[0]) < 0.005:
+                break
+            time.sleep(0.01)
+
+    print(f"  [Recenter] Done at J0={state.get_joint_positions()[0]:.4f} rad")
+
+
+def _detect_objects(frame, yolo_model):
+    """
+    YOLO-only detection for the recovery circle.
+    Annotates frame in-place.
+    Returns (found: bool, pixel_x: float|None)
+    """
+    results = yolo_model(frame, imgsz=640, conf=CONF_THRESHOLD, verbose=False)
+    r = results[0]
+    if r.boxes is not None and len(r.boxes) > 0:
+        best = max(r.boxes, key=lambda b: float(b.conf[0]))
+        x1, y1, x2, y2 = map(int, best.xyxy[0])
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 165, 255), 2)
+        label = yolo_model.names[int(best.cls[0])]
+        cv2.putText(frame, f"YOLO {label}", (x1, y1 - 8),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 165, 255), 2)
+        return True, (x1 + x2) / 2.0
+    return False, None
+
+
 def _stopj(sender, acc=0.8):
     sender.send(f"stopj({acc:.4f})")
 
@@ -266,43 +371,6 @@ def _open_camera():
     device = dai.Device(pipeline)
     queue  = device.getOutputQueue(name="video", maxSize=1, blocking=False)
     return device, queue
-
-
-def _detect_objects(frame, K, dist_coeffs, aruco_detector, yolo_model):
-    """
-    ArUco first, YOLO fallback. Annotates frame in-place.
-    Returns (found, pixel_x, mode) or (False, None, None).
-    """
-    grey = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-    # ArUco
-    corners, ids, _ = aruco_detector.detectMarkers(grey)
-    if ids is not None:
-        aruco.drawDetectedMarkers(frame, corners, ids)
-        for i, mid in enumerate(ids.flatten()):
-            if mid != ARUCO_TAG_ID:
-                continue
-            rvecs, tvecs, _ = aruco.estimatePoseSingleMarkers(
-                corners[i:i+1], MARKER_SIZE, K, dist_coeffs)
-            cv2.drawFrameAxes(frame, K, dist_coeffs,
-                               rvecs[0][0], tvecs[0][0], MARKER_SIZE * 0.5)
-            pixel_x = float(corners[i][0][:, 0].mean())
-            return True, pixel_x, "aruco"
-
-    # YOLO
-    results = yolo_model(frame, imgsz=640, conf=CONF_THRESHOLD, verbose=False)
-    r = results[0]
-    if r.boxes is not None and len(r.boxes) > 0:
-        best = max(r.boxes, key=lambda b: float(b.conf[0]))
-        x1, y1, x2, y2 = map(int, best.xyxy[0])
-        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 165, 255), 2)
-        label = yolo_model.names[int(best.cls[0])]
-        cv2.putText(frame, f"YOLO {label}", (x1, y1 - 8),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 165, 255), 2)
-        pixel_x = (x1 + x2) / 2.0
-        return True, pixel_x, "yolo_only"
-
-    return False, None, None
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -332,9 +400,15 @@ def main(clearance_z: float) -> bool:
     # ── 1. Open gripper ───────────────────────────────────────────────────────
     _open_gripper(state)
 
-    # ── 2. Rise to clearance_z (absolute — safe if already there) ─────────────
-    print(f"  [Recover] Rising to clearance_z={clearance_z:.4f} …")
-    _movel(sender, state, cx, cy, clearance_z, crx, cry, crz)
+    # ── 2. Load scan pose, rise to scan height ─────────────────────────────
+    with open(SCAN_POSE_FILE) as f:
+        _scan = json.load(f)
+    scan_tcp = _scan["tcp_pose"]          # [x, y, z, rx, ry, rz]
+    scan_z   = float(scan_tcp[2])         # height from scan_pose — recovery rises here
+    rx, ry, rz = scan_tcp[3], scan_tcp[4], scan_tcp[5]   # wrist orientation
+
+    print(f"  [Recover] Rising to scan height + orientation (Z={scan_z:.4f}) …")
+    _movel(sender, state, cx, cy, scan_z, rx, ry, rz)
     cur = state.get_tcp_pose()
     print(f"  [Recover] At Z={cur[2]:.4f}")
 
@@ -355,20 +429,17 @@ def main(clearance_z: float) -> bool:
     print("  [Recover] Loading YOLO detection model …")
     yolo_model = YOLO(str(DETECT_MODEL_PATH), task="detect")
 
-    # ── 4. Build search circle centred on current XY ──────────────────────────
-    # Use scan pose TCP rotation so wrist orientation matches the scanning pose
-    with open(SCAN_POSE_FILE) as f:
-        _scan = json.load(f)
-    rx, ry, rz = _scan["tcp_pose"][3], _scan["tcp_pose"][4], _scan["tcp_pose"][5]
+    # ── 4. Build search circle at scan height ──────────────────────────────
+    # scan_z and rx/ry/rz already loaded in step 2
     circle_cx, circle_cy = cur[0], cur[1]
 
     R = SEARCH_RADIUS_M
     waypoints = [
-        (circle_cx + R, circle_cy,     clearance_z),
-        (circle_cx,     circle_cy + R, clearance_z),
-        (circle_cx - R, circle_cy,     clearance_z),
-        (circle_cx,     circle_cy - R, clearance_z),
-        (circle_cx,     circle_cy,     clearance_z),   # return to centre
+        (circle_cx + R, circle_cy,     scan_z),
+        (circle_cx,     circle_cy + R, scan_z),
+        (circle_cx - R, circle_cy,     scan_z),
+        (circle_cx,     circle_cy - R, scan_z),
+        (circle_cx,     circle_cy,     scan_z),   # return to centre
     ]
 
     print(f"  [Recover] Opening camera + starting {R*1000:.0f} mm search circle …")
@@ -394,32 +465,28 @@ def main(clearance_z: float) -> bool:
         frame = queue.get().getCvFrame()
 
         if K is not None:
-            found, pixel_x, mode = _detect_objects(
-                frame, K, dist_coeffs, aruco_detector, yolo_model)
+            found, pixel_x = _detect_objects(frame, yolo_model)
 
-            if found:
-                result["found"] = True
+            if found and not result["centred"]:
+                result["found"]   = True
+                result["centred"] = True
                 offset_px = pixel_x - frame_cx
-                centred   = abs(offset_px) < CENTER_TOL_PX
+                _stopj(sender)
+                print(f"  [Recover] ✓ Object detected [YOLO]  "
+                      f"offset={offset_px:+.0f}px — stopping circle.")
 
-                if centred and not result["centred"]:
-                    result["centred"] = True
-                    _stopj(sender)
-                    print(f"  [Recover] ✓ Object centred [{mode}]  "
-                          f"offset={offset_px:+.0f}px — stopping circle.")
-
-                # Draw centring line
+            # Draw overlay
+            if found and pixel_x is not None:
                 cv2.line(frame, (int(pixel_x), 0), (int(pixel_x), VIDEO_H),
                          (0, 255, 0), 1)
                 cv2.line(frame, (int(frame_cx), 0), (int(frame_cx), VIDEO_H),
                          (255, 255, 255), 1)
-                status = (f"CENTRED [{mode}]  offset={offset_px:+.0f}px"
-                          if result["centred"]
-                          else f"DETECTED [{mode}]  centering …  offset={offset_px:+.0f}px")
-                cv2.putText(frame, status, (10, 38),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                offset_px = pixel_x - frame_cx
+                cv2.putText(frame,
+                            f"DETECTED [YOLO]  offset={offset_px:+.0f}px — recentering …",
+                            (10, 38), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
             else:
-                cv2.putText(frame, "Searching (ArUco + YOLO) …",
+                cv2.putText(frame, "Searching (YOLO) …",
                             (10, 38), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 80, 220), 2)
 
         cv2.imshow("recover — search circle", cv2.resize(frame, (640, 360)))
@@ -428,6 +495,11 @@ def main(clearance_z: float) -> bool:
             break
 
     circle_thread.join(timeout=2.0)
+
+    # ── Active recentering: J0 correction to bring object to frame centre ─────
+    if result["centred"]:
+        _recenter_j0(sender, state, queue, yolo_model, frame_cx)
+
     cv2.destroyAllWindows()
     cam_device.close()
 
