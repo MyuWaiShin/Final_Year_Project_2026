@@ -62,7 +62,7 @@ HOVER_RZ = 0.022
 CLEARANCE_OFFSET_M = 0.40   # metres above hover Z
 
 # ── Stability (autonomous mode) ───────────────────────────────────────────────
-STABLE_FRAMES_NEEDED = 8
+STABLE_FRAMES_NEEDED = 5
 STABLE_TOL_M         = 0.005
 
 # ── Calibration offsets (zeroed after recalibration — adjust if needed) ──────
@@ -71,7 +71,7 @@ CALIB_Y_OFFSET_M = -0.050
 CALIB_Z_OFFSET_M = 0.000
 
 # ── Motion ───────────────────────────────────────────────────────────────────
-MOVE_SPEED = 0.04
+MOVE_SPEED = 0.05
 MOVE_ACCEL = 0.01
 XYZ_TOL_M  = 0.003
 
@@ -399,7 +399,7 @@ def center_horizontal_yolo(videoQueue, depthQueue, yolo_model,
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
-def main(autonomous: bool = False):
+def main(autonomous: bool = False, force_yolo: bool = False):
     signal.signal(signal.SIGINT, lambda *_: os._exit(1))
 
     # ── Load calibration ──────────────────────────────────────────────────────
@@ -471,8 +471,10 @@ def main(autonomous: bool = False):
     print("Camera started!\n")
 
     print("=" * 55)
+    if force_yolo:
+        print("  MODE   →  YOLO-only (ArUco disabled)")
     if autonomous:
-        print(f"  AUTO  →  moves when detection stable {STABLE_FRAMES_NEEDED} frames")
+        print(f"  AUTO   →  moves when detection stable {STABLE_FRAMES_NEEDED} frames")
     else:
         print("  SPACE  →  hover above detected object")
     print("  Q      →  quit / abort")
@@ -497,8 +499,8 @@ def main(autonomous: bool = False):
         aruco_found = False
         yolo_found  = False
 
-        # ── 1. Try ArUco ─────────────────────────────────────────────────────
-        if ids is not None:
+        # ── 1. Try ArUco (skipped when force_yolo=True) ──────────────────────
+        if ids is not None and not force_yolo:
             aruco.drawDetectedMarkers(frame, corners, ids)
             for i, mid in enumerate(ids.flatten()):
                 if mid != ARUCO_TAG_ID:
@@ -531,8 +533,8 @@ def main(autonomous: bool = False):
                             (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (255, 255, 0), 1)
                 break
 
-        # ── 2. Fall back to YOLO + depth ──────────────────────────────────────
-        if not aruco_found:
+        # ── 2. YOLO + depth (always used when force_yolo=True) ───────────────
+        if force_yolo or not aruco_found:
             results = yolo_model(frame, imgsz=640, conf=CONF_THRESHOLD, verbose=False)
             r = results[0]
             if r.boxes is not None and len(r.boxes) > 0:

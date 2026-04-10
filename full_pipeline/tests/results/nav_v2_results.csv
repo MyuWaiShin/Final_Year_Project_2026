@@ -1,0 +1,14 @@
+timestamp,trial_id,stage,position_id,position_label,repeat_num,detection_mode,hover_x,hover_y,hover_z,clearance_z,aligned,notes
+2026-04-07T21:51:35,1,nav_v2,1,P1 — grid near-left,1,aruco,0.29116,-1.02234,-0.30169,0.09831,0,hover yes but couldnt grab
+2026-04-07T22:11:46,1,nav_v2,1,P1 — grid near-left,1,aruco,0.13643,-1.03994,-0.29358,0.10642,1,good
+2026-04-07T22:12:50,2,nav_v2,1,P1 — grid near-left,2,aruco,-0.00871,-1.05436,-0.29448,0.10552,1,good
+2026-04-07T22:13:51,3,nav_v2,1,P1 — grid near-left,3,aruco,-0.1234,-1.06216,-0.29258,0.10742,1,
+2026-04-07T22:15:06,4,nav_v2,2,P2 — grid near-centre,1,aruco,-0.27871,-1.06722,-0.28959,0.11041,1,
+2026-04-07T22:18:08,1,nav_v2,1,P1 — grid near-left,1,aruco,-0.42577,-1.08545,-0.2776,0.1224,1,
+2026-04-07T22:20:04,2,nav_v2,1,P1 — grid near-left,2,aruco,0.28175,-0.89132,-0.30311,0.09689,1,
+2026-04-07T22:21:09,3,nav_v2,1,P1 — grid near-left,3,aruco,0.13246,-0.89552,-0.30397,0.09603,0,y
+2026-04-07T22:22:15,4,nav_v2,2,P2 — grid near-centre,1,aruco,-0.01638,-0.90294,-0.30436,0.09564,1,
+2026-04-07T22:26:21,1,nav_v2,1,P1 — grid near-left,1,aruco,-0.15836,-0.91401,-0.30292,0.09708,1,
+2026-04-07T22:28:00,2,nav_v2,1,P1 — grid near-left,2,aruco,-0.28557,-0.91871,-0.30346,0.09654,1,
+2026-04-07T22:32:12,1,nav_v2,1,P1 — grid near-left,1,aruco,-0.4431,-0.92844,-0.29871,0.10129,1,
+2026-04-07T22:32:51,2,nav_v2,1,P1 — grid near-left,2,none,0,0,0,0,-1,explore failed

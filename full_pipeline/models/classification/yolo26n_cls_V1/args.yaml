@@ -1,4 +1,4 @@
-task: classify
+patask: classify
 mode: train
 model: yolo26n-cls.pt
 data: C:\Users\OS439\Desktop\workspace\today\classify_dataset

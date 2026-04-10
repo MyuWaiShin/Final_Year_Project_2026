@@ -65,7 +65,7 @@ SWEEP_START_RAD  = -0.5
 SWEEP_END_RAD    =  0.5
 SWEEP_SPEED      =  0.2   # rad/s
 SWEEP_ACCEL      =  0.1   # rad/s²
-SWEEP_STOP_ACCEL =  0.8   # rad/s²  (hard stop)
+SWEEP_STOP_ACCEL =  0.5   # rad/s²  (hard stop)
 
 SCAN_MAX_SWEEPS  = 2
 RETRY_LOWER_M    = 0.10   # metres to descend on retry

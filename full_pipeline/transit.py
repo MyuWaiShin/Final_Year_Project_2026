@@ -78,7 +78,7 @@ CLS_EMPTY_CONSEC_NEEDED = 3      # consecutive empty frames before triggering
 MANUAL_FOCUS = 46
 
 # ── Motion ────────────────────────────────────────────────────────────────────
-MOVE_SPEED = 0.06
+MOVE_SPEED = 0.08
 MOVE_ACCEL = 0.02
 XYZ_TOL_M  = 0.005
 

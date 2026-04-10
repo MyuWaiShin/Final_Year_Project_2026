@@ -1,0 +1,11 @@
+timestamp,trial_id,stage,scenario,hover_x,hover_y,hover_z,pick_z,width_mm,force_detected,system_prediction,actual_grasped,correct,notes
+2026-04-02T21:26:52,1,grasp,B_air_miss,0.06877,-0.93232,-0.30715,-0.37715,,0,missed,0,1,bottle removed - air close
+2026-04-02T21:27:51,2,grasp,B_air_miss,-0.02327,-0.90878,-0.31504,-0.38504,,0,missed,0,1,bottle removed - air close
+2026-04-02T21:28:44,3,grasp,B_air_miss,0.01334,-0.90531,-0.30417,-0.37417,,0,missed,0,1,bottle removed - air close
+2026-04-02T21:29:33,4,grasp,B_air_miss,0.01477,-0.85359,-0.30983,-0.37983,,0,missed,0,1,bottle removed - air close
+2026-04-02T21:30:35,5,grasp,B_air_miss,-0.00347,-0.99144,-0.305,-0.375,,0,missed,0,1,bottle removed - air close
+2026-04-02T21:31:39,6,grasp,A_contact_miss,-0.02174,-0.80731,-0.31538,-0.38538,,0,missed,0,1,bottle nudged sideways - edge contact
+2026-04-02T21:32:35,7,grasp,A_contact_miss,0.01167,-0.84692,-0.3117,-0.3817,,0,missed,0,1,bottle nudged sideways - edge contact
+2026-04-02T21:33:31,8,grasp,A_contact_miss,0.00826,-0.88685,-0.31156,-0.38156,,0,missed,0,1,bottle nudged sideways - edge contact
+2026-04-02T21:34:26,9,grasp,A_contact_miss,0.02865,-0.87875,-0.30058,-0.37058,,0,missed,0,1,bottle nudged sideways - edge contact
+2026-04-02T21:35:23,10,grasp,A_contact_miss,0.03568,-0.83717,-0.31133,-0.38133,,0,missed,0,1,bottle nudged sideways - edge contact

@@ -1,0 +1,20 @@
+timestamp,trial_id,stage,attempt_num,detection_mode,hover_x,hover_y,hover_z,clearance_z,recovered,notes
+2026-04-07T22:39:36,1,recover_v2,1,aruco,-0.33586,-0.86898,-0.32179,0.07821,1,
+2026-04-07T22:41:08,2,recover_v2,1,aruco,-0.1863,-0.94638,-0.3195,0.0805,1,
+2026-04-07T22:41:39,3,recover_v2,1,ERROR,0,0,0,0,0,recover error: Communication exception - possible device error/misconfiguration. Original message 'Couldn't read data from stream: 'video' (X_LINK_ERROR)'
+2026-04-07T22:48:15,1,recover_v2,1,aruco,-0.01761,-0.96677,-0.30941,0.09059,1,
+2026-04-07T22:49:51,2,recover_v2,1,aruco,0.06994,-1.12627,-0.30403,0.09597,1,
+2026-04-07T22:51:49,3,recover_v2,1,aruco,0.2643,-1.1002,-0.33272,0.06728,1,
+2026-04-07T22:55:13,1,recover_v2,1,aruco,-0.20607,-0.97042,-0.32139,0.07861,1,
+2026-04-07T22:56:28,2,recover_v2,1,aruco,-0.34826,-1.10374,-0.29899,0.10101,1,
+2026-04-07T22:56:59,3,recover_v2,1,ERROR,0,0,0,0,0,recover error: Communication exception - possible device error/misconfiguration. Original message 'Couldn't read data from stream: 'video' (X_LINK_ERROR)'
+2026-04-07T22:57:55,3,recover_v2,2,aruco,-0.43551,-0.97832,-0.33137,0.06863,1,
+2026-04-07T22:58:28,4,recover_v2,1,ERROR,0,0,0,0,0,recover error: Communication exception - possible device error/misconfiguration. Original message 'Couldn't read data from stream: 'video' (X_LINK_ERROR)'
+2026-04-07T22:59:26,4,recover_v2,2,aruco,-0.22849,-1.00989,-0.32612,0.07388,1,
+2026-04-07T23:01:14,5,recover_v2,1,aruco,0.04026,-0.87892,-0.34437,0.05563,1,
+2026-04-07T23:01:48,6,recover_v2,1,ERROR,0,0,0,0,0,recover error: Communication exception - possible device error/misconfiguration. Original message 'Couldn't read data from stream: 'video' (X_LINK_ERROR)'
+2026-04-07T23:02:13,6,recover_v2,2,ERROR,0,0,0,0,0,recover error: Device already closed or disconnected: io error
+2026-04-07T23:03:10,6,recover_v2,3,aruco,-0.05948,-1.15394,-0.3051,0.0949,1,
+2026-04-07T23:05:13,7,recover_v2,1,aruco,0.27304,-0.8832,-0.33785,0.06215,0,"couldnt make secure grasp, contact failure"
+2026-04-07T23:06:23,7,recover_v2,2,aruco,0.15087,-1.00271,-0.32139,0.07861,1,
+2026-04-07T23:10:03,1,recover_v2,1,aruco,0.14712,-1.00308,-0.31046,0.08954,1,

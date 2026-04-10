@@ -46,11 +46,13 @@ GRIP_OPEN_URP = "/programs/myu/open_gripper.urp"
 GRIP_OPEN_MM  = 85.0
 
 # ── Drop geometry ─────────────────────────────────────────────────────────────
-DROP_HEIGHT_M = 0.500   # metres to descend below clearance_z — brings TCP back to hover_z
+DROP_HEIGHT_M = 0.450   # metres to descend below clearance_z
+# = CLEARANCE_OFFSET (0.40) + DESCEND_OFFSET (0.07)
+# → drop_z = clearance_z - 0.470 = hover_z - 0.070 = same depth as pick_z
 
 # ── Motion ────────────────────────────────────────────────────────────────────
-MOVE_SPEED     = 0.04   # m/s — horizontal + rise
-MOVE_ACCEL     = 0.01   # m/s²
+MOVE_SPEED     = 0.08   # m/s — horizontal + rise
+MOVE_ACCEL     = 0.02   # m/s²
 DESCEND_SPEED  = 0.02   # m/s — slow descent onto surface
 DESCEND_ACCEL  = 0.008  # m/s²
 JOINT_SPEED    = 0.5    # rad/s — return to scan pose
@@ -249,6 +251,13 @@ def _open_gripper(state):
         print("  [Release] Gripper already open.")
         return
     print("  [Release] Opening gripper …")
+    
+    # Must stop any running program before loading
+    resp = _dashboard_cmd("running", retries=2)
+    if "true" in resp.lower():
+        _dashboard_cmd("stop")
+        _wait_urp_done(timeout=3.0)
+
     _dashboard_cmd(f"load {GRIP_OPEN_URP}")
     time.sleep(0.06)
     _dashboard_cmd("play")
